@@ -1,15 +1,16 @@
 import { useState, type FormEvent } from 'react';
+import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Badge,
   Button,
-  EmptyState,
   Field,
   Input,
-  Panel,
   Skeleton,
   StatusBanner,
+  StatusDot,
   Textarea,
+  toneGlyph,
 } from '@oremedia/ui';
 import { Drawer, DrawerContent } from '../../components/drawer';
 import { LoadMore } from '../../components/load-more';
@@ -19,20 +20,42 @@ import { Select } from '../../components/select';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
+import { brandPath } from '../brand/brand-context';
 import { useFacts } from '../brand/use-brand';
 import { StartRunForm } from '../agents/start-run-form';
+import type { BriefValues } from '../agents/schema-fields';
+import { destinationLabel, type DestinationDto } from '../destinations/use-destinations';
 import { dayKey } from '../publishing/publication-state';
 import type { ChannelDto } from '../publishing/use-publishing';
-import { briefChip, briefGaps, isSuggested, packageChip } from './content-helpers';
+import {
+  briefChip,
+  briefGaps,
+  isSuggested,
+  packageChip,
+  revisionChip,
+  variantFindings,
+  variantStatusText,
+} from './content-helpers';
 import { ArticleEditor, emptyArticleDraft, parseArticleDraft } from './article-editor';
 import { DocumentPicker } from './document-picker';
 import { PlanGrid } from './plan-grid';
-import { useBrief, usePlanItems, type BriefDto, type PackagesQuery } from './use-content';
+import { RequestReview } from './request-review';
+import {
+  useBrief,
+  usePackage,
+  usePlanItems,
+  type BriefDto,
+  type PackageSummaryDto,
+  type PackagesQuery,
+} from './use-content';
 
 export interface BriefDetailProps {
+  companyId: string;
   brandId: string;
   briefId: string;
   channels: ReadonlyMap<string, ChannelDto>;
+  /** R2-3: the brand's websites, named on the variant lines beside the channels. */
+  destinations: ReadonlyMap<string, DestinationDto>;
   /** The brand's packages, newest first and paged; this brief's are the ones pointing at it. */
   packages: PackagesQuery;
   selectedPackageId: string | null;
@@ -63,6 +86,25 @@ function planningValues(
       ', ',
     ),
     notes: b.constraints.join('\n'),
+  };
+}
+
+/**
+ * The copywriting brief prefilled from this brief ("Draft variants with agent"): the message as objective and
+ * key message, the audience, the first planned channel; the person completes the rest before starting the run.
+ */
+function copywritingValues(b: BriefDto, channels: ReadonlyMap<string, ChannelDto>): BriefValues {
+  const first = b.channelConnectionIds[0];
+  return {
+    briefId: b.id,
+    brief: {
+      objective: b.message,
+      audience: b.audience,
+      keyMessages: b.message,
+      channelKey: first ? (channels.get(first)?.providerKey ?? first) : '',
+      contentType: 'social_post',
+    },
+    variantCount: '3',
   };
 }
 
@@ -165,7 +207,8 @@ function CreatePackageForm({
   };
   const ui = create.isError ? toUiError(create.error) : null;
   return (
-    <form onSubmit={submit} className="flex flex-col gap-2 border-t border-border pt-3" noValidate>
+    <form onSubmit={submit} className="flex flex-col gap-3 border-t border-border pt-3" noValidate>
+      <p className="text-sm font-medium">New package</p>
       <div className="grid gap-2 sm:grid-cols-[1fr_14rem]">
         <Field label="Package title" htmlFor="pkg-title">
           <Input
@@ -218,7 +261,6 @@ function CreatePackageForm({
       <div>
         <Button
           type="submit"
-          size="sm"
           variant="primary"
           disabled={create.isPending || !title.trim()}
           disabledReason={title.trim() ? undefined : 'Give the package a title'}
@@ -230,11 +272,83 @@ function CreatePackageForm({
   );
 }
 
-/** Spec 21.2 campaign planner: incomplete brief, suggested plan awaiting acceptance, accepted plan, and its packages. */
+/**
+ * One content package of the brief, as the interface lists them: the title with "rev N · state" at the right,
+ * then one line per channel or website variant with its validity. The list carries only the package, so the
+ * revision and its variants are read per package (the same read the package detail makes, shared by the cache).
+ */
+function PackageRow({
+  pkg,
+  selected,
+  onSelect,
+  channels,
+  destinations,
+}: {
+  pkg: PackageSummaryDto;
+  selected: boolean;
+  onSelect: () => void;
+  channels: ReadonlyMap<string, ChannelDto>;
+  destinations: ReadonlyMap<string, DestinationDto>;
+}) {
+  const detail = usePackage(pkg.id);
+  const p = detail.data;
+  return (
+    <li className="flex flex-col gap-2 border-t border-border py-3">
+      <button
+        type="button"
+        aria-pressed={selected}
+        onClick={onSelect}
+        data-testid={`package-${pkg.id}`}
+        className="flex items-start justify-between gap-3 rounded-sm text-left text-base hover:text-accent-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      >
+        <span className={selected ? 'font-bold' : 'font-medium'}>{pkg.title}</span>
+        <span className="shrink-0 pt-0.5 text-xs tabular-nums text-muted-foreground">
+          {p
+            ? `rev ${p.revision.number} · ${revisionChip(p.revision.state).label}`
+            : packageChip(pkg.state).label}
+        </span>
+      </button>
+      {detail.isPending && <Skeleton label={`Loading the variants of ${pkg.title}`} lines={1} />}
+      {detail.isError && (
+        <span className="text-xs text-muted-foreground">The variants could not be read.</span>
+      )}
+      {p && p.variants.length === 0 && (
+        <span className="text-xs text-muted-foreground">No variants yet.</span>
+      )}
+      {p &&
+        p.variants.map((v) => {
+          const findings = variantFindings(v.validation);
+          const tone = findings.ok ? 'good' : 'warning';
+          const channel = v.channelConnectionId ? channels.get(v.channelConnectionId) : undefined;
+          const label = v.destinationId
+            ? destinationLabel(destinations.get(v.destinationId), v.destinationId)
+            : (channel?.displayName ?? v.channelConnectionId ?? v.id);
+          return (
+            <span key={v.id} className="flex items-center gap-2 pl-0.5 text-xs text-muted-foreground">
+              <StatusDot tone={tone} size="sm" />
+              <span className="sr-only">{toneGlyph[tone]} </span>
+              <span>
+                {label} — {variantStatusText(findings)}
+              </span>
+            </span>
+          );
+        })}
+    </li>
+  );
+}
+
+/**
+ * Spec 21.2 campaign planner, laid out as the interface's brief document: the eyebrow "BRIEF · state", the message
+ * as the title, the incomplete note, Audience / Channels / Constraints, the plan, the content packages with their
+ * variants, and the three actions (open in studio, draft variants with agent, send the package for review).
+ * States: incomplete brief, suggested plan awaiting acceptance, accepted plan, and its packages.
+ */
 export function BriefDetail({
+  companyId,
   brandId,
   briefId,
   channels,
+  destinations,
   packages,
   selectedPackageId,
   onSelectPackage,
@@ -246,7 +360,10 @@ export function BriefDetail({
   const queryClient = useQueryClient();
   const brief = useBrief(briefId);
   const plan = usePlanItems(briefId);
+  const selectedPackage = usePackage(selectedPackageId);
   const [planning, setPlanning] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [sending, setSending] = useState(false);
   const intent = useIntentKey();
   const accept = useMutation(
     trpc.content.briefs.accept.mutationOptions({
@@ -263,9 +380,12 @@ export function BriefDetail({
   const chip = b ? briefChip(b.state) : null;
   const gaps = b ? briefGaps(b) : [];
   const proposedCount = plan.data?.items.filter((i) => i.state === 'proposed').length ?? 0;
+  const pkg = selectedPackage.data;
+  const studioDocument = pkg?.creativeDocuments[0];
+  const reviewable = pkg && (pkg.revision.state === 'draft' || pkg.revision.state === 'changes_requested');
 
   return (
-    <Panel title="Brief" data-testid="brief-detail">
+    <section aria-labelledby="brief-title" className="flex flex-col gap-7" data-testid="brief-detail">
       {brief.isPending && <Skeleton label="Loading brief" />}
       {brief.isError && (
         <RequestError
@@ -275,24 +395,32 @@ export function BriefDetail({
         />
       )}
       {b && chip && (
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <Badge tone={chip.tone} data-testid="brief-state">
-              {chip.label}
-            </Badge>
-            {isSuggested(b) && (
-              <Badge tone="info" glyph={false}>
-                Suggested plan
-              </Badge>
-            )}
-            {gaps.length > 0 && <Badge tone="warning">Incomplete</Badge>}
-            <code className="text-xs text-muted-foreground">{b.id}</code>
+        <>
+          <div className="flex flex-col gap-2">
+            <p className="text-xs uppercase tabular-nums text-muted-foreground">
+              Brief · <span data-testid="brief-state">{chip.label}</span>
+              {isSuggested(b) && ' · Suggested plan'}
+              {gaps.length > 0 && ' · Incomplete'}
+            </p>
+            <h2
+              id="brief-title"
+              className="text-balance break-words text-xl font-bold leading-[1.25] tracking-[-0.01em]"
+            >
+              {b.message || b.audience || b.id}
+            </h2>
           </div>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+          {gaps.length > 0 && (
+            <div
+              role="status"
+              className="rounded-lg bg-accent-tint px-3.5 py-2.5 text-sm"
+              data-testid="brief-incomplete"
+            >
+              Incomplete brief. Missing: {gaps.join(', ')}. A plan produced from it will have to guess these.
+            </div>
+          )}
+          <dl className="grid grid-cols-[100px_minmax(0,1fr)] gap-x-3 gap-y-3 text-sm">
             <dt className="text-muted-foreground">Audience</dt>
-            <dd>{b.audience || 'not set'}</dd>
-            <dt className="text-muted-foreground">Message</dt>
-            <dd className="whitespace-pre-wrap break-words">{b.message || 'not set'}</dd>
+            <dd className="break-words">{b.audience || '—'}</dd>
             <dt className="text-muted-foreground">Channels</dt>
             <dd>
               {b.channelConnectionIds.length
@@ -302,31 +430,27 @@ export function BriefDetail({
                       return c ? `${c.displayName} (${c.providerKey})` : id;
                     })
                     .join(', ')
-                : 'none planned'}
+                : '—'}
             </dd>
-            <dt className="text-muted-foreground">Offer facts</dt>
-            <dd>
-              {b.offerFactIds.length ? <OfferFacts brandId={brandId} factIds={b.offerFactIds} /> : 'none'}
-            </dd>
+            {b.offerFactIds.length > 0 && (
+              <>
+                <dt className="text-muted-foreground">Offer facts</dt>
+                <dd>
+                  <OfferFacts brandId={brandId} factIds={b.offerFactIds} />
+                </dd>
+              </>
+            )}
             <dt className="text-muted-foreground">Constraints</dt>
-            <dd>{b.constraints.length ? b.constraints.join('; ') : 'none'}</dd>
+            <dd className="break-words">{b.constraints.length ? b.constraints.join(' · ') : '—'}</dd>
             {b.recommendationId && (
               <>
-                <dt className="text-muted-foreground">From recommendation</dt>
+                <dt className="text-muted-foreground">From</dt>
                 <dd>
-                  <code>{b.recommendationId}</code>
+                  Recommendation <code className="text-xs">{b.recommendationId}</code>
                 </dd>
               </>
             )}
           </dl>
-          {gaps.length > 0 && (
-            <StatusBanner
-              tone="warning"
-              title="Incomplete brief"
-              description={`Missing: ${gaps.join(', ')}. A plan produced from it will have to guess these.`}
-              data-testid="brief-incomplete"
-            />
-          )}
           {b.state === 'draft' && (
             <StatusBanner
               tone="warning"
@@ -378,40 +502,33 @@ export function BriefDetail({
               )}
             </DrawerContent>
           </Drawer>
-          <section aria-labelledby="brief-packages" className="flex flex-col gap-2">
-            <h3 id="brief-packages" className="text-sm font-semibold">
+          <section aria-labelledby="brief-packages" className="flex flex-col">
+            <h3 id="brief-packages" className="om-label mb-2">
               Content packages
             </h3>
             {packages.isPending && <Skeleton label="Loading packages" lines={2} />}
-            {packages.isSuccess && mine.length === 0 ? (
-              <EmptyState
-                title="No packages for this brief"
-                description={
-                  b.state === 'draft'
-                    ? 'Accept the brief, then create its first content package.'
-                    : 'Create the first content package below.'
-                }
-              />
-            ) : (
-              <ul className="flex flex-col gap-1" aria-label="Content packages">
-                {mine.map((p) => {
-                  const pc = packageChip(p.state);
-                  const selected = p.id === selectedPackageId;
-                  return (
-                    <li key={p.id}>
-                      <button
-                        type="button"
-                        aria-pressed={selected}
-                        onClick={() => onSelectPackage(p.id)}
-                        data-testid={`package-${p.id}`}
-                        className={`flex w-full flex-wrap items-center gap-2 rounded-md border p-2 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${selected ? 'border-accent bg-secondary' : 'border-border hover:bg-muted'}`}
-                      >
-                        <span className="font-medium">{p.title}</span>
-                        <Badge tone={pc.tone}>{pc.label}</Badge>
-                      </button>
-                    </li>
-                  );
-                })}
+            {packages.isSuccess && mine.length === 0 && (
+              <p className="border-t border-border py-2.5 text-sm text-muted-foreground" role="status">
+                No packages yet.{' '}
+                {b.state === 'draft'
+                  ? 'Accept the brief to create them from its plan.'
+                  : b.state === 'cancelled'
+                    ? 'The brief is cancelled.'
+                    : 'Create the first one below.'}
+              </p>
+            )}
+            {mine.length > 0 && (
+              <ul className="flex flex-col" aria-label="Content packages">
+                {mine.map((p) => (
+                  <PackageRow
+                    key={p.id}
+                    pkg={p}
+                    selected={p.id === selectedPackageId}
+                    onSelect={() => onSelectPackage(p.id)}
+                    channels={channels}
+                    destinations={destinations}
+                  />
+                ))}
               </ul>
             )}
             <LoadMore
@@ -420,14 +537,117 @@ export function BriefDetail({
               isFetchingNextPage={packages.isFetchingNextPage}
               onLoadMore={() => void packages.fetchNextPage()}
               noun="brand packages"
-              className="px-0"
+              className="py-2"
             />
             {b.state !== 'draft' && b.state !== 'cancelled' && (
               <CreatePackageForm brandId={brandId} briefId={b.id} onCreated={onSelectPackage} />
             )}
           </section>
-        </div>
+          <div className="flex flex-wrap gap-2" data-testid="brief-actions">
+            {studioDocument ? (
+              <Button asChild variant="primary">
+                <Link
+                  to={brandPath(
+                    companyId,
+                    brandId,
+                    `studio/${encodeURIComponent(studioDocument.documentId)}`,
+                  )}
+                >
+                  Open in studio
+                </Link>
+              </Button>
+            ) : pkg ? (
+              <Button asChild variant="primary">
+                <Link
+                  to={brandPath(companyId, brandId, 'studio')}
+                  title="No document is pinned yet: the studio opens on its creation screen"
+                >
+                  Open in studio
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                variant="primary"
+                disabledReason={
+                  !selectedPackageId
+                    ? 'Choose a content package first'
+                    : selectedPackage.isError
+                      ? 'The package could not be read'
+                      : 'The package is still loading'
+                }
+              >
+                Open in studio
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              onClick={() => setDrafting(true)}
+              disabledReason={b.state === 'cancelled' ? 'The brief is cancelled' : undefined}
+            >
+              Draft variants with agent
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setSending(true)}
+              disabledReason={
+                !selectedPackageId
+                  ? 'Choose a content package first'
+                  : !pkg
+                    ? selectedPackage.isError
+                      ? 'The package could not be read'
+                      : 'The package is still loading'
+                    : !reviewable
+                      ? `Revision ${pkg.revision.number} is ${revisionChip(pkg.revision.state).label.toLowerCase()}; only a draft revision can be sent for review`
+                      : undefined
+              }
+            >
+              Send package for review
+            </Button>
+          </div>
+          <Drawer open={drafting} onOpenChange={setDrafting}>
+            <DrawerContent
+              title="Draft variants with agent"
+              side="right"
+              className="w-[min(92vw,34rem)] overflow-y-auto p-5"
+            >
+              {drafting && (
+                <StartRunForm
+                  brandId={brandId}
+                  brandName={brandName}
+                  hrefFor={agentRunHref}
+                  initial={{ taskKind: 'copywriting', values: copywritingValues(b, channels) }}
+                />
+              )}
+            </DrawerContent>
+          </Drawer>
+          <Drawer open={sending} onOpenChange={setSending}>
+            <DrawerContent
+              title="Send package for review"
+              side="right"
+              className="w-[min(92vw,30rem)] overflow-y-auto p-5"
+            >
+              {sending && pkg && reviewable && (
+                <div className="flex flex-col gap-3">
+                  <p className="text-lg font-bold">Send {pkg.title} for review</p>
+                  <p className="text-sm text-muted-foreground">
+                    Revision {pkg.revision.number} and its {pkg.variants.length} variant
+                    {pkg.variants.length === 1 ? '' : 's'} are frozen into the review manifest.
+                  </p>
+                  <RequestReview
+                    key={pkg.revision.id}
+                    companyId={companyId}
+                    brandId={brandId}
+                    timeZone={timeZone}
+                    contentPackageId={pkg.id}
+                    revision={pkg.revision}
+                    variantCount={pkg.variants.length}
+                  />
+                </div>
+              )}
+            </DrawerContent>
+          </Drawer>
+        </>
       )}
-    </Panel>
+    </section>
   );
 }

@@ -21,6 +21,7 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { useBrandContext } from '../brand/brand-context';
+import { initialsOf } from '../session/account-menu';
 import { useSessionUser } from '../session/use-session-user';
 import { useBrands } from '../brand/use-brand';
 import { useChannels } from '../publishing/use-publishing';
@@ -110,7 +111,7 @@ const expiryText = (iso: string) =>
 /**
  * A one-time password setup link for one member (there is no mailer: the owner or admin hands it over). The link is
  * shown once, with a copy button and its expiry; issuing another replaces it. It is also how a forgotten password is
- * reset. The API refuses a person who also belongs to another company (they set a password in Settings → Account),
+ * reset. The API refuses a person who also belongs to another company (they set a password in Settings → Appearance),
  * a link for an owner or admin unless an owner asks, and a link for yourself (not offered on your own row).
  */
 function IssuePasswordLink({ membershipId, who }: { membershipId: string; who: string }) {
@@ -435,7 +436,7 @@ function MemberStatusAction({ member, who }: { member: MemberRow; who: string })
 /** Settings → Members (owners and admins): who belongs to the company, their role, status and brand scope. */
 export function Members() {
   const members = useMembers(true);
-  // Your own password is set in Settings → Account (behind the current password), never through a link.
+  // Your own password is set in Settings → Appearance (behind the current password), never through a link.
   const me = useSessionUser(true).data?.userId ?? null;
   const brands = useBrands();
   const brandName = (id: string) => brands.data?.find((b) => b.id === id)?.name ?? id;
@@ -452,45 +453,54 @@ export function Members() {
         <EmptyState title="No members" description="Invite the first member below." />
       )}
       {members.data && members.data.items.length > 0 && (
-        <ul className="flex flex-col divide-y divide-border" aria-label="Members">
-          {members.data.items.map((m) => (
-            <li
-              key={m.membershipId}
-              className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1 py-3"
-            >
-              <div className="min-w-0">
-                <p className="text-sm font-medium">{m.name ?? m.email ?? m.userId}</p>
-                {m.email && m.name && <p className="text-xs text-muted-foreground">{m.email}</p>}
-                <p className="mt-0.5 text-xs text-muted-foreground">
+        <ul className="flex flex-col" aria-label="Members">
+          {members.data.items.map((m) => {
+            const who = m.name ?? m.email ?? m.userId;
+            return (
+              <li
+                key={m.membershipId}
+                className="grid grid-cols-[28px_minmax(0,1fr)] items-center gap-x-3.5 gap-y-2 border-t border-border py-3 sm:grid-cols-[32px_minmax(0,1fr)_170px_90px]"
+              >
+                <span
+                  aria-hidden="true"
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-secondary text-xs font-medium"
+                >
+                  {initialsOf(who)}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-base">{who}</p>
+                  {m.email && m.name && <p className="text-xs text-muted-foreground">{m.email}</p>}
+                </div>
+                <div className="col-start-2 flex flex-wrap items-center gap-2 text-sm sm:col-start-auto">
+                  <span>{roleLabel(m.role)}</span>
+                  <Badge tone={STATUS_TONE[m.status] ?? 'neutral'}>{roleLabel(m.status)}</Badge>
+                </div>
+                <p className="col-start-2 text-xs text-muted-foreground sm:col-start-auto sm:text-right">
                   {m.allBrands
                     ? 'All brands'
                     : m.brandIds.length
                       ? m.brandIds.map(brandName).join(', ')
                       : 'No brands granted yet'}
                 </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge glyph={false}>{roleLabel(m.role)}</Badge>
-                <Badge tone={STATUS_TONE[m.status] ?? 'neutral'}>{roleLabel(m.status)}</Badge>
-                {m.status !== 'disabled' && m.userId !== me && (
-                  <IssuePasswordLink membershipId={m.membershipId} who={m.name ?? m.email ?? m.userId} />
-                )}
-                {m.userId !== me && <ManageMember member={m} who={m.name ?? m.email ?? m.userId} />}
-                {m.userId !== me && m.status !== 'invited' && (
-                  <MemberStatusAction member={m} who={m.name ?? m.email ?? m.userId} />
-                )}
-                {m.userId === me && (
-                  <Link
-                    to="?tab=account"
-                    className="text-xs text-muted-foreground underline underline-offset-2"
-                    data-testid="own-password-settings"
-                  >
-                    Your password: Settings → Account
-                  </Link>
-                )}
-              </div>
-            </li>
-          ))}
+                <div className="col-start-2 flex flex-wrap items-center gap-2 sm:col-span-3">
+                  {m.status !== 'disabled' && m.userId !== me && (
+                    <IssuePasswordLink membershipId={m.membershipId} who={who} />
+                  )}
+                  {m.userId !== me && <ManageMember member={m} who={who} />}
+                  {m.userId !== me && m.status !== 'invited' && <MemberStatusAction member={m} who={who} />}
+                  {m.userId === me && (
+                    <Link
+                      to="?tab=appearance"
+                      className="text-xs text-muted-foreground underline underline-offset-2"
+                      data-testid="own-password-settings"
+                    >
+                      Your password: Settings → Appearance
+                    </Link>
+                  )}
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
       <InviteMember />
@@ -618,7 +628,7 @@ export function Mandates({ canManage }: { canManage: boolean }) {
         />
       )}
       {mandates.data && mandates.data.items.length > 0 && (
-        <ul className="flex flex-col divide-y divide-border" aria-label="Mandates">
+        <ul className="flex flex-col gap-4" aria-label="Mandates">
           {mandates.data.items.map((m) => {
             const rules = [
               m.sourceRules.onlyApprovedFacts && 'approved facts only',
@@ -628,18 +638,18 @@ export function Mandates({ canManage }: { canManage: boolean }) {
             ].filter(Boolean);
             const live = m.state === 'active' || m.state === 'paused';
             return (
-              <li key={m.id} className="flex flex-col gap-2 py-3" data-testid="mandate">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-medium">
+              <li
+                key={m.id}
+                className="flex flex-col gap-3 rounded-xl border border-border bg-card px-5 py-[18px]"
+                data-testid="mandate"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-md font-bold">
                     {day(m.windowStart)} to {day(m.windowEnd)}
                   </p>
-                  <div className="flex items-center gap-2">
-                    <Badge tone={MANDATE_TONE[m.state] ?? 'neutral'}>{roleLabel(m.state)}</Badge>
-                    {canManage && m.state === 'active' && <MandateAction mandate={m} kind="pause" />}
-                    {canManage && live && <MandateAction mandate={m} kind="revoke" />}
-                  </div>
+                  <Badge tone={MANDATE_TONE[m.state] ?? 'neutral'}>{roleLabel(m.state)}</Badge>
                 </div>
-                <dl className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-[10rem_1fr]">
+                <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[140px_minmax(0,1fr)]">
                   <dt className="text-muted-foreground">Channels</dt>
                   <dd>{m.channelConnectionIds.map(channelName).join(', ')}</dd>
                   <dt className="text-muted-foreground">Content classes</dt>
@@ -653,6 +663,12 @@ export function Mandates({ canManage }: { canManage: boolean }) {
                     <code className="text-xs">{m.servicePrincipalId}</code>
                   </dd>
                 </dl>
+                {canManage && live && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {m.state === 'active' && <MandateAction mandate={m} kind="pause" />}
+                    <MandateAction mandate={m} kind="revoke" />
+                  </div>
+                )}
               </li>
             );
           })}

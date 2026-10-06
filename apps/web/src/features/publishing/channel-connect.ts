@@ -4,6 +4,7 @@ import type {
   CertifiableCapability,
   ProviderActivationState,
 } from '@oremedia/contracts/providers';
+import type { ChannelLimitsV1 } from '@oremedia/contracts/publishing';
 
 /**
  * The Release 1 provider keys (spec 14.8, the registry in packages/providers). The API has no provider listing, so
@@ -19,6 +20,34 @@ export const RELEASE_1_PROVIDERS: ReadonlyArray<{ key: string; label: string }> 
 
 export const providerLabel = (key: string): string =>
   RELEASE_1_PROVIDERS.find((p) => p.key === key)?.label ?? key;
+
+const durationText = (seconds: number): string =>
+  seconds % 60 === 0
+    ? `${seconds / 60} min`
+    : seconds < 60
+      ? `${seconds} s`
+      : `${Math.floor(seconds / 60)} min ${seconds % 60} s`;
+
+/**
+ * The platform limits of a provider as the Channels list states them under each row ("Image ≤ 10, video ≤ 15 min,
+ * carousel ≤ 10 · 2,200 chars"): the media forms the capability register (spec 14.6) allows with their caps, then the
+ * caption length.
+ */
+export function channelLimitsLine(
+  limit: Pick<ChannelLimitsV1, 'text' | 'image' | 'video' | 'carousel'>,
+): string {
+  const forms: string[] = [];
+  if (limit.image) forms.push(limit.image.maxCount > 1 ? `image ≤ ${limit.image.maxCount}` : 'image');
+  if (limit.video) forms.push(`video ≤ ${durationText(limit.video.maxDurationSec)}`);
+  if (limit.carousel) forms.push(`carousel ≤ ${limit.carousel.max}`);
+  const text = `${limit.text.maxLength.toLocaleString('en-US')} chars`;
+  if (forms.length === 0) return text;
+  const first = forms[0] as string;
+  return `${first.charAt(0).toUpperCase()}${first.slice(1)}${forms
+    .slice(1)
+    .map((f) => `, ${f}`)
+    .join('')} · ${text}`;
+}
 
 /** The chip for a provider's activation state (RA-01), as `operations.providers.list` derives it. */
 export const ACTIVATION_CHIP: Record<

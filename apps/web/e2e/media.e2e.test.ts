@@ -119,7 +119,7 @@ describe.skipIf(!enabled)('video and audio media (built app in Chromium, mock tr
     expect(detail).toContain('h264 · 1080×1920 · 30 fps');
     await page.keyboard.press('Escape');
     // The library lists it with its duration.
-    await page.getByRole('group', { name: 'View' }).getByRole('button', { name: 'All assets' }).click();
+    await page.getByRole('group', { name: 'Show' }).getByRole('button', { name: 'All', exact: true }).click();
     await expect
       .poll(() => page.getByTestId('asset-list').getByTestId('asset-duration').first().textContent(), {
         timeout: 15_000,

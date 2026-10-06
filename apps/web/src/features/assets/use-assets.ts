@@ -1,6 +1,7 @@
 import { useQueries, useQuery } from '@tanstack/react-query';
 import type { inferOutput } from '@trpc/tanstack-react-query';
 import type { AssetKind, AssetPurpose, DerivativePurpose } from '@oremedia/contracts/assets';
+import type { Tone } from '@oremedia/ui';
 import { useCursorPages } from '../../lib/cursor-pages';
 import { useTRPC, useTRPCClient, type Trpc } from '../../lib/trpc';
 
@@ -51,6 +52,67 @@ export const ASSET_ISSUE_TEXT: Record<AssetIssueDto, { label: string; detail: st
   no_version: { label: 'No version', detail: 'The file has not been ingested.' },
 };
 
+export const ISSUE_TONE: Record<AssetIssueDto, Tone> = {
+  pending_review: 'info',
+  rejected: 'critical',
+  retired: 'neutral',
+  rights_unknown: 'warning',
+  rights_expired: 'critical',
+  rights_expiring: 'warning',
+  no_version: 'warning',
+};
+
+/** The card's one line of state: the first issue carries the dot, the others follow it; no issue is "Cleared". */
+export const cardState = (issues: readonly AssetIssueDto[]): { tone: Tone; label: string } => {
+  const first = issues[0];
+  if (!first) return { tone: 'good', label: 'Cleared' };
+  return { tone: ISSUE_TONE[first], label: issues.map((i) => ASSET_ISSUE_TEXT[i].label).join(' · ') };
+};
+
+/**
+ * The interface's filter chips over every asset (spec 21.2), each mapped to what assets.list can filter by. Where
+ * the server has no filter for a chip (Expiring, Missing rights, Restricted), `keep` narrows the loaded rows and the
+ * foot says how many were looked at; the interface's "Duplicates" has no row to show (ingest refuses a duplicate
+ * file at upload, spec 9.1 `duplicate_of`), so it is not offered.
+ */
+export interface ListFilterChip {
+  key: string;
+  label: string;
+  filter: AssetListFilter;
+  keep?: (a: AssetListItemDto) => boolean;
+  /** What the client-side chip looks for, for the empty state ("None of the N assets loaded …"). */
+  looksFor?: string;
+}
+export const ALL_ASSET_CHIP: ListFilterChip = { key: 'all', label: 'All', filter: {} };
+export const ASSET_LIST_CHIPS: ListFilterChip[] = [
+  ALL_ASSET_CHIP,
+  { key: 'attention', label: 'Needs attention', filter: { needsAttention: true } },
+  { key: 'approved', label: 'Approved', filter: { state: 'approved' } },
+  {
+    key: 'expiring',
+    label: 'Expiring',
+    filter: { needsAttention: true },
+    keep: (a) => a.issues.includes('rights_expiring') || a.issues.includes('rights_expired'),
+    looksFor: 'has rights expiring or expired',
+  },
+  {
+    key: 'missing',
+    label: 'Missing rights',
+    filter: { needsAttention: true },
+    keep: (a) => a.issues.includes('rights_unknown'),
+    looksFor: 'is missing its rights',
+  },
+  {
+    key: 'restricted',
+    label: 'Restricted',
+    filter: {},
+    keep: (a) =>
+      a.rights !== null && (a.rights.permittedChannels !== 'all' || a.rights.territories !== 'all'),
+    looksFor: 'is restricted to particular channels or territories',
+  },
+  { key: 'retired', label: 'Retired', filter: { state: 'retired' } },
+];
+
 /** Spec 9.2: the search returns eligible assets only; ineligible ones never appear here. Page by page (spec 7.4). */
 export function useAssetSearch(
   brandId: string,
@@ -98,6 +160,15 @@ export function useAssetVersions(assetId: string, enabled = true) {
   const trpc = useTRPC();
   return useQuery({
     ...trpc.assets.versions.list.queryOptions({ assetId, page: { limit: 50 } }),
+    enabled,
+  });
+}
+
+/** Where an asset's versions are used (revisions, exports, publications): the inspector's "Used in" count. */
+export function useAssetUsages(assetId: string, enabled = true) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.assets.usages.list.queryOptions({ assetId, page: { limit: 50 } }),
     enabled,
   });
 }

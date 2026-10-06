@@ -1,10 +1,25 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type LiHTMLAttributes, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, EmptyState, Skeleton, StatusBanner } from '@oremedia/ui';
+import {
+  Badge,
+  Button,
+  EmptyState,
+  Skeleton,
+  StatusBanner,
+  StatusDot,
+  toneGlyph,
+  type Tone,
+} from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/dropdown-menu';
 import { RequestError } from '../../components/request-state';
-import { Section } from '../../components/section';
+import { GroupHeader } from '../../components/section';
 import { useDeploymentBrand } from '../../lib/deployment-brand';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
@@ -18,6 +33,8 @@ import {
   activationReason,
   callbackError,
   callbackParams,
+  channelLimitsLine,
+  connectReturnTab,
   providerLabel,
   connectRedirectUri,
   rememberConnect,
@@ -25,7 +42,7 @@ import {
   unavailableReason,
 } from './channel-connect';
 import { CHANNEL_CHIP, CHANNEL_HEALTH_CHIP, channelNeedsAction } from './publication-state';
-import { useChannels, type ChannelDto, type ConnectResultDto } from './use-publishing';
+import { useChannelLimits, useChannels, type ChannelDto, type ConnectResultDto } from './use-publishing';
 
 type ConnectChoice = Extract<ConnectResultDto, { outcome: 'choose' }>;
 type ConnectedChannel = Extract<ConnectResultDto, { outcome: 'connected' }>;
@@ -33,27 +50,19 @@ type ConnectedChannel = Extract<ConnectResultDto, { outcome: 'connected' }>;
 /**
  * Spec 14.7 connect start: the server returns the provider's authorisation URL; it opens in a new tab as a link (never
  * an iframe, the provider's consent screen must be top-level). An uncertified provider is refused with its reason.
+ * One mutation per row (and one for the "Connect a channel" menu), started with the provider's key.
  */
-function ConnectButton({
+function useConnectStart({
   brandId,
-  providerKey,
-  redirectUri,
-  label,
   onUnavailable,
-  unavailable,
 }: {
   brandId: string;
-  providerKey: string;
-  redirectUri: string;
-  label: string;
-  onUnavailable?: (reason: string) => void;
-  unavailable?: string | null;
+  onUnavailable?: (providerKey: string, reason: string) => void;
 }) {
   const trpc = useTRPC();
-  const deployment = useDeploymentBrand();
   const { companyId } = useBrandContext();
   const intent = useIntentKey();
-  const start = useMutation(
+  return useMutation(
     trpc.publishing.channels.connect.start.mutationOptions({
       ...mutationIntent(intent.key),
       onSuccess: (data) => {
@@ -61,27 +70,55 @@ function ConnectButton({
         // The provider returns to the shared callback; this is how it finds its way back to this brand.
         rememberConnect(data.state, { companyId, brandId, expiresAt: data.expiresAt });
       },
-      onError: (err) => {
+      onError: (err, variables) => {
         const reason = unavailableReason(toUiError(err).details);
-        if (reason) onUnavailable?.(reason);
+        if (reason) onUnavailable?.(variables.providerKey, reason);
       },
     }),
   );
+}
+type ConnectStart = ReturnType<typeof useConnectStart>;
+
+/** The row's connect control; `label` is its accessible name, `text` what the row shows when it is shorter. */
+function ConnectButton({
+  start,
+  brandId,
+  providerKey,
+  redirectUri,
+  label,
+  text,
+  unavailable,
+}: {
+  start: ConnectStart;
+  brandId: string;
+  providerKey: string;
+  redirectUri: string;
+  label: string;
+  text?: string;
+  unavailable?: string | null;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant="secondary"
+      aria-label={text && text !== label ? label : undefined}
+      onClick={() => start.mutate({ brandId, providerKey, redirectUri })}
+      disabled={start.isPending || Boolean(unavailable)}
+      disabledReason={unavailable ?? undefined}
+    >
+      {start.isPending ? 'Starting…' : (text ?? label)}
+    </Button>
+  );
+}
+
+/** What a connect start answered: the authorisation link to open, or why it was refused; spans the row below its controls. */
+function ConnectResult({ start, providerKey }: { start: ConnectStart; providerKey: string }) {
+  const deployment = useDeploymentBrand();
   const ui = start.isError ? toUiError(start.error) : null;
   const refusedAsUnavailable = ui !== null && unavailableReason(ui.details) !== null;
+  if (!start.data && !ui) return null;
   return (
-    <div className="flex flex-col gap-2">
-      <div>
-        <Button
-          size="sm"
-          variant="primary"
-          onClick={() => start.mutate({ brandId, providerKey, redirectUri })}
-          disabled={start.isPending || Boolean(unavailable)}
-          disabledReason={unavailable ?? undefined}
-        >
-          {start.isPending ? 'Starting…' : label}
-        </Button>
-      </div>
+    <div className="order-last flex basis-full flex-col gap-2">
       {start.data && (
         <StatusBanner
           tone="info"
@@ -187,71 +224,323 @@ function DisconnectButton({
   );
 }
 
+/**
+ * A row of the Channels list as the interface draws it: name and handle with the platform limits under them, a dot
+ * and the state, the controls at the right end. Whatever a control opens (a banner, the Manage card) spans the full
+ * width under the row. Below 640 px the name takes its own line and the state sits beside the controls.
+ */
+function ListRow({
+  name,
+  handle,
+  limits,
+  tone,
+  status,
+  detail,
+  actions,
+  children,
+  ...attrs
+}: {
+  name: string;
+  handle: string;
+  limits: string | null;
+  tone: Tone;
+  status: string;
+  detail?: ReactNode;
+  actions: ReactNode;
+  children?: ReactNode;
+} & LiHTMLAttributes<HTMLLIElement>) {
+  return (
+    <li className="flex flex-wrap items-center gap-x-4 gap-y-3 border-t border-border py-4" {...attrs}>
+      <div className="flex min-w-0 basis-full flex-col gap-0.5 sm:flex-1 sm:basis-48">
+        <p className="text-base font-bold leading-5">
+          {name} <span className="text-xs font-normal tabular-nums text-muted-foreground">{handle}</span>
+        </p>
+        {limits && <p className="text-xs text-muted-foreground">{limits}</p>}
+      </div>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5 text-sm text-muted-foreground sm:w-[200px] sm:flex-none">
+        <span className="flex items-center gap-1.5">
+          <StatusDot tone={tone} size="sm" />
+          <span className="sr-only">{toneGlyph[tone]} </span>
+          {status}
+        </span>
+        {detail && <span className="text-xs">{detail}</span>}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">{actions}</div>
+      {children}
+    </li>
+  );
+}
+
+/** The card a row's Manage / Details opens: columns of labelled facts, as the interface lays them out. */
+const DETAIL_CARD =
+  'om-in grid basis-full grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-7 gap-y-4 rounded-xl border border-border bg-card px-[18px] py-4';
+
+function DetailColumn({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <h4 className="om-label">{label}</h4>
+      {children}
+    </div>
+  );
+}
+
+function DetailRows({ rows }: { rows: ReadonlyArray<readonly [string, ReactNode]> }) {
+  return (
+    <dl className="flex flex-col gap-1.5 text-sm">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex justify-between gap-2.5">
+          <dt className="text-muted-foreground">{k}</dt>
+          <dd className="text-right text-xs tabular-nums">{v}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+const when = (iso: string) =>
+  new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
 function ChannelRow({
   channel,
   brandId,
   redirectUri,
+  limits,
+  activation,
 }: {
   channel: ChannelDto;
   brandId: string;
   redirectUri: string;
+  limits: string | null;
+  activation: ProviderActivationDto | null;
 }) {
   const chip = CHANNEL_CHIP[channel.status];
   const health = CHANNEL_HEALTH_CHIP[channel.health];
+  const live = channel.status !== 'disabled';
   const reconnect = channel.status !== 'active' || channelNeedsAction(channel);
+  // The dot carries the state that needs the person: the connection's, else the access's, else the connection's.
+  const tone: Tone = chip.needsAction || !live ? chip.tone : health.needsAction ? health.tone : chip.tone;
+  const [open, setOpen] = useState(false);
   /** What the disconnect of this row did (held publications, the remote side), shown after the button is gone. */
   const [disconnected, setDisconnected] = useState<DisconnectResultDto | null>(null);
+  const start = useConnectStart({ brandId });
+  const checked = live && channel.healthCheckedAt ? `Checked ${when(channel.healthCheckedAt)}.` : null;
+  const token = channel.tokenExpiresAt
+    ? `Token ${new Date(channel.tokenExpiresAt).getTime() < Date.now() ? 'expired' : 'expires'} ${when(channel.tokenExpiresAt)}.`
+    : null;
+  const missing =
+    channel.missingScopes.length > 0 ? `Missing scopes: ${channel.missingScopes.join(', ')}.` : null;
+  const cardId = `channel-manage-${channel.id}`;
   return (
-    <li
-      className="flex flex-col gap-2 py-3"
+    <ListRow
       data-testid={`channel-${channel.id}`}
       data-channel-status={channel.status}
       data-channel-health={channel.health}
+      name={channel.displayName}
+      handle={providerLabel(channel.providerKey)}
+      limits={limits}
+      tone={tone}
+      status={live ? `${chip.label} · ${health.label}` : chip.label}
+      detail={[checked, token, missing].filter(Boolean).join(' ') || undefined}
+      actions={
+        <>
+          {reconnect && (
+            <ConnectButton
+              start={start}
+              brandId={brandId}
+              providerKey={channel.providerKey}
+              redirectUri={redirectUri}
+              label={channel.status === 'disabled' ? 'Connect again' : 'Reconnect'}
+            />
+          )}
+          <Button
+            size="sm"
+            variant="secondary"
+            aria-expanded={open}
+            aria-controls={cardId}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? 'Close' : 'Manage'}
+          </Button>
+        </>
+      }
     >
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-medium">
-          {channel.displayName} ({channel.providerKey})
-        </span>
-        <Badge tone={chip.tone}>{chip.label}</Badge>
-        {channel.status !== 'disabled' && <Badge tone={health.tone}>{health.label}</Badge>}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {chip.detail}
-        {channel.status !== 'disabled' && ` ${health.detail}`}
-        {channel.status !== 'disabled' &&
-          channel.healthCheckedAt &&
-          ` Checked ${new Date(channel.healthCheckedAt).toLocaleString()}.`}
-        {channel.tokenExpiresAt &&
-          ` Token ${new Date(channel.tokenExpiresAt).getTime() < Date.now() ? 'expired' : 'expires'} ${new Date(channel.tokenExpiresAt).toLocaleString()}.`}
-        {channel.missingScopes.length > 0 && ` Missing scopes: ${channel.missingScopes.join(', ')}.`}
-      </p>
-      <div className="flex flex-wrap items-start gap-2">
-        {reconnect && (
-          <ConnectButton
-            brandId={brandId}
-            providerKey={channel.providerKey}
-            redirectUri={redirectUri}
-            label={channel.status === 'disabled' ? 'Connect again' : 'Reconnect'}
-          />
-        )}
-        {channel.status !== 'disabled' && (
-          <DisconnectButton channel={channel} onDisconnected={setDisconnected} />
-        )}
-      </div>
+      <ConnectResult start={start} providerKey={channel.providerKey} />
+      {open && (
+        <div id={cardId} className={DETAIL_CARD}>
+          <DetailColumn label="Health">
+            <DetailRows
+              rows={[
+                ['Connection', chip.label],
+                ['Access', live ? health.label : '—'],
+                ['Checked', channel.healthCheckedAt && live ? when(channel.healthCheckedAt) : '—'],
+                [
+                  'Token',
+                  channel.tokenExpiresAt
+                    ? `${new Date(channel.tokenExpiresAt).getTime() < Date.now() ? 'Expired' : 'Expires'} ${when(channel.tokenExpiresAt)}`
+                    : 'No expiry recorded',
+                ],
+              ]}
+            />
+            <p className="text-xs text-muted-foreground">
+              {chip.detail}
+              {live && ` ${health.detail}`}
+            </p>
+          </DetailColumn>
+          <DetailColumn label="Permissions granted">
+            {channel.grantedScopes.length === 0 && channel.missingScopes.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No scopes recorded for this connection.</p>
+            ) : (
+              <ul className="flex flex-col gap-1.5 text-sm" aria-label="Scopes">
+                {channel.grantedScopes.map((scope) => (
+                  <li key={scope} className="flex gap-2">
+                    <span aria-hidden="true" className="text-status-good">
+                      ✓
+                    </span>
+                    <span className="sr-only">granted </span>
+                    <code className="text-xs">{scope}</code>
+                  </li>
+                ))}
+                {channel.missingScopes.map((scope) => (
+                  <li key={scope} className="flex gap-2 text-muted-foreground">
+                    <span aria-hidden="true">—</span>
+                    <span className="sr-only">missing </span>
+                    <code className="text-xs">{scope}</code>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </DetailColumn>
+          <DetailColumn label="Publishing">
+            <DetailRows
+              rows={[
+                ['Can publish', channel.usable ? 'Yes' : 'No'],
+                ['Capability version', String(channel.capabilityVersion)],
+                ['Per-post settings', channel.settingsSchema ? 'Offered in the editor' : 'None'],
+              ]}
+            />
+            {activation && <CapabilityCertifications activation={activation} />}
+            {live && (
+              <div className="mt-1.5 flex flex-col gap-2">
+                <DisconnectButton channel={channel} onDisconnected={setDisconnected} />
+              </div>
+            )}
+          </DetailColumn>
+        </div>
+      )}
       {disconnected && disconnected.heldPublicationIds.length > 0 && (
-        <p className="text-xs text-muted-foreground" data-testid="held-after-disconnect">
+        <p className="basis-full text-xs text-muted-foreground" data-testid="held-after-disconnect">
           {disconnected.heldPublicationIds.length} scheduled publication
           {disconnected.heldPublicationIds.length === 1 ? ' is' : 's are'} now held.
         </p>
       )}
       {disconnected && (
-        <p className="text-xs text-muted-foreground" data-testid="remote-revoke">
+        <p className="basis-full text-xs text-muted-foreground" data-testid="remote-revoke">
           {disconnected.remoteRevoke === 'requested'
             ? 'The platform is being asked to revoke the access; the stored credential is destroyed right after, whatever it answers.'
             : 'This provider has no remote revoke; the stored credential was destroyed. Remove the app from the account at the platform if you want the access gone there too.'}
         </p>
       )}
-    </li>
+    </ListRow>
+  );
+}
+
+/**
+ * A provider that can be connected (RA-01): its state on this deployment and why it cannot be connected as the row's
+ * text; its credential references (by name only) and the certification of each capability (PR-06) behind Details.
+ */
+function ProviderRow({
+  provider,
+  brandId,
+  redirectUri,
+  limits,
+  connected,
+  reason,
+  onUnavailable,
+}: {
+  provider: { key: string; label: string; activation: ProviderActivationDto | null };
+  brandId: string;
+  redirectUri: string;
+  limits: string | null;
+  connected: number;
+  reason: string | null;
+  onUnavailable: (providerKey: string, reason: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const start = useConnectStart({ brandId, onUnavailable });
+  const activation = provider.activation ? ACTIVATION_CHIP[provider.activation.state] : null;
+  const unavailable = (activation && activation.label !== 'Ready') || (!activation && reason !== null);
+  const status = unavailable
+    ? `Unavailable${activation ? `: ${activation.label.toLowerCase()}` : ''}`
+    : connected > 0
+      ? `${connected} connected`
+      : 'Not connected';
+  const cardId = `provider-details-${provider.key}`;
+  return (
+    <ListRow
+      data-testid={`provider-${provider.key}`}
+      data-provider-state={provider.activation?.state ?? 'unknown'}
+      name={provider.label}
+      handle="—"
+      limits={limits}
+      tone={unavailable && activation ? activation.tone : 'neutral'}
+      status={status}
+      detail={reason ? <span data-testid="unavailable-reason">{reason}</span> : undefined}
+      actions={
+        <>
+          <Button
+            size="sm"
+            variant="secondary"
+            aria-expanded={open}
+            aria-controls={cardId}
+            aria-label={`Details of ${provider.label}`}
+            onClick={() => setOpen((v) => !v)}
+          >
+            {open ? 'Close' : 'Details'}
+          </Button>
+          <ConnectButton
+            start={start}
+            brandId={brandId}
+            providerKey={provider.key}
+            redirectUri={redirectUri}
+            label={`Connect ${provider.label}`}
+            text="Connect"
+            unavailable={reason}
+          />
+        </>
+      }
+    >
+      <ConnectResult start={start} providerKey={provider.key} />
+      {open && (
+        <div id={cardId} className={DETAIL_CARD}>
+          <DetailColumn label="Activation">
+            {activation ? (
+              <Badge tone={activation.tone}>{activation.label}</Badge>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                The activation state is read by owners and admins; the server decides when you connect.
+              </p>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Provider key <code>{provider.key}</code>
+            </p>
+            {provider.activation && provider.activation.credentialRefs.length > 0 && (
+              <p className="text-xs text-muted-foreground" data-testid="credential-refs">
+                Credential references:{' '}
+                {provider.activation.credentialRefs
+                  .map((c) => `${c.name} (${c.present ? 'set' : 'not set'})`)
+                  .join(', ')}
+                .
+              </p>
+            )}
+          </DetailColumn>
+          {provider.activation && provider.activation.capabilities.length > 0 && (
+            <DetailColumn label="Capability certification">
+              <CapabilityCertifications activation={provider.activation} />
+            </DetailColumn>
+          )}
+        </div>
+      )}
+    </ListRow>
   );
 }
 
@@ -313,7 +602,7 @@ function ChooseAccount({ choice, onDone }: { choice: ConnectChoice; onDone: () =
   return (
     <form
       onSubmit={onSubmit}
-      className="flex flex-col gap-3 rounded-md border border-border p-3"
+      className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
       noValidate
       data-testid="connect-choose"
     >
@@ -409,17 +698,69 @@ function FinishConnect({ state, code, onDone }: { state: string; code: string; o
   );
 }
 
+type Listed = { key: string; label: string; activation: ProviderActivationDto | null };
+
 /**
- * Spec 21.1 `settings/` channels (spec 14.7): each connection with its status as text, connect and reconnect through
- * the provider's authorisation page, completion on return, disconnect with confirmation. The Settings screen shows
- * it as its Channels tab.
+ * "Connect a channel": the platform is chosen from a menu (the interface's first step) and the server's
+ * authorisation link appears under the heading; a platform that cannot be connected here says why instead.
+ */
+function ConnectChannelMenu({
+  providers,
+  reasonFor,
+  start,
+  brandId,
+  redirectUri,
+}: {
+  providers: readonly Listed[];
+  reasonFor: (p: Listed) => string | null;
+  start: ConnectStart;
+  brandId: string;
+  redirectUri: string;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="primary" disabled={start.isPending}>
+          {start.isPending ? 'Starting…' : 'Connect a channel'}
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {providers.map((p) => {
+          const reason = reasonFor(p);
+          return (
+            <DropdownMenuItem
+              key={p.key}
+              disabled={reason !== null}
+              title={reason ?? undefined}
+              onSelect={() => start.mutate({ brandId, providerKey: p.key, redirectUri })}
+            >
+              <span className="flex-1">{p.label}</span>
+              {reason && <span className="text-xs text-muted-foreground">unavailable</span>}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Spec 21.1 `settings/` channels (spec 14.7), as the interface's Channels tab: one list of the brand's connections
+ * (state as text with a dot, Reconnect when the access is dead, Manage for the health, scopes and publishing
+ * detail with Disconnect) followed by the platforms that can be connected (Details for the activation and the
+ * certification of each capability). Connect and reconnect go through the provider's authorisation page,
+ * completion on return, disconnect with confirmation.
  */
 export function ChannelSettings() {
-  const { brandId, brand } = useBrandContext();
+  const { brandId } = useBrandContext();
   const channels = useChannels(brandId);
+  const limits = useChannelLimits(brandId);
   const [params, setParams] = useSearchParams();
-  const callback = callbackParams(params.toString());
-  const providerError = callbackError(params.toString());
+  // A destination's return (R2-1) carries `tab=destinations` (connectReturnTab) and is finished by the websites
+  // and sources group under this list, never here.
+  const ownReturn = params.get('tab') !== connectReturnTab('destination');
+  const callback = ownReturn ? callbackParams(params.toString()) : null;
+  const providerError = ownReturn ? callbackError(params.toString()) : null;
   const [unavailable, setUnavailable] = useState<Record<string, string>>({});
   const redirectUri = connectRedirectUri(window.location.origin);
   const clearCallback = () => setParams({}, { replace: true });
@@ -427,15 +768,31 @@ export function ChannelSettings() {
   // RA-01: owners and admins see every registered channel provider with why it cannot be connected here; the
   // others get the Release 1 list and the server's refusal, as before.
   const providers = useProviders();
-  const listed: ReadonlyArray<{ key: string; label: string; activation: ProviderActivationDto | null }> =
-    providers.data
-      ? providers.data.items
-          .filter((p) => p.kind === 'channel')
-          .map((p) => ({ key: p.key, label: providerLabel(p.key), activation: p }))
-      : RELEASE_1_PROVIDERS.map((p) => ({ ...p, activation: null }));
+  const listed: readonly Listed[] = providers.data
+    ? providers.data.items
+        .filter((p) => p.kind === 'channel')
+        .map((p) => ({ key: p.key, label: providerLabel(p.key), activation: p }))
+    : RELEASE_1_PROVIDERS.map((p) => ({ ...p, activation: null }));
+  const activationOf = (key: string) => listed.find((p) => p.key === key)?.activation ?? null;
+  const reasonFor = (p: Listed) =>
+    unavailable[p.key] ?? (p.activation ? activationReason(p.activation) : null);
+  const limitsFor = (key: string) => {
+    const limit = limits.data?.items.find((l) => l.providerKey === key);
+    return limit ? channelLimitsLine(limit) : null;
+  };
+  const onUnavailable = (key: string, reason: string) => setUnavailable((u) => ({ ...u, [key]: reason }));
+  const headerStart = useConnectStart({ brandId, onUnavailable });
+  const connected = channels.data?.filter((c) => c.status !== 'disabled') ?? [];
+  const attention = connected.filter(channelNeedsAction).length;
+  const summary = channels.isPending
+    ? 'Loading the connections…'
+    : channels.isError
+      ? 'The connections could not be read.'
+      : `${connected.length} connected${attention > 0 ? ` · ${attention} need${attention === 1 ? 's' : ''} attention` : ''}`;
+  const connectedByKey = (key: string) => connected.filter((c) => c.providerKey === key).length;
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-5">
       {callback && <FinishConnect state={callback.state} code={callback.code} onDone={clearCallback} />}
       {providerError && (
         <StatusBanner
@@ -450,24 +807,34 @@ export function ChannelSettings() {
           data-testid="provider-error"
         />
       )}
-      <Section
-        id="channels-heading"
-        title="Connected channels"
-        testId="channels"
-        action={
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => void channels.refetch()}
-            disabled={channels.isFetching}
-          >
-            {channels.isFetching ? 'Refreshing…' : 'Refresh'}
-          </Button>
-        }
-      >
-        <p className="text-xs text-muted-foreground">
-          The social accounts {brand.name} publishes to. Credentials are sealed server-side and never shown.
-        </p>
+      <section aria-labelledby="channels-heading" className="flex flex-col gap-5" data-testid="channels">
+        <GroupHeader
+          id="channels-heading"
+          title="Connected channels"
+          description={summary}
+          action={
+            <>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => void channels.refetch()}
+                disabled={channels.isFetching}
+              >
+                {channels.isFetching ? 'Refreshing…' : 'Refresh'}
+              </Button>
+              {listUi?.kind !== 'forbidden' && (
+                <ConnectChannelMenu
+                  providers={listed}
+                  reasonFor={reasonFor}
+                  start={headerStart}
+                  brandId={brandId}
+                  redirectUri={redirectUri}
+                />
+              )}
+            </>
+          }
+        />
+        <ConnectResult start={headerStart} providerKey={headerStart.variables?.providerKey ?? ''} />
         {channels.isPending && <Skeleton label="Loading channels" lines={3} />}
         {channels.isError && (
           <RequestError
@@ -479,72 +846,46 @@ export function ChannelSettings() {
         {channels.isSuccess && channels.data.length === 0 && (
           <EmptyState
             title="No channels connected"
-            description="Connect a provider below to publish to it."
+            description="Connect a platform from the list below to publish to it."
           />
         )}
-        {channels.isSuccess && channels.data.length > 0 && (
-          <ul className="divide-y divide-border" aria-label="Channels">
-            {channels.data.map((c) => (
-              <ChannelRow key={c.id} channel={c} brandId={brandId} redirectUri={redirectUri} />
-            ))}
-          </ul>
-        )}
-      </Section>
-      {listUi?.kind !== 'forbidden' && (
-        <Section id="providers-heading" title="Connect a channel" testId="providers">
-          <p className="text-xs text-muted-foreground">
-            Only providers certified after their platform review can be connected; the server refuses the
-            others and the reason is shown here.
-          </p>
-          <ul className="divide-y divide-border" aria-label="Providers">
-            {listed.map((p) => {
-              const reason = unavailable[p.key] ?? (p.activation ? activationReason(p.activation) : null);
-              const activation = p.activation ? ACTIVATION_CHIP[p.activation.state] : null;
-              return (
-                <li
+        <div className="flex flex-col">
+          {channels.isSuccess && channels.data.length > 0 && (
+            <ul className="flex flex-col" aria-label="Channels">
+              {channels.data.map((c) => (
+                <ChannelRow
+                  key={c.id}
+                  channel={c}
+                  brandId={brandId}
+                  redirectUri={redirectUri}
+                  limits={limitsFor(c.providerKey)}
+                  activation={activationOf(c.providerKey)}
+                />
+              ))}
+            </ul>
+          )}
+          {listUi?.kind !== 'forbidden' && (
+            <ul className="flex flex-col" aria-label="Providers" data-testid="providers">
+              {listed.map((p) => (
+                <ProviderRow
                   key={p.key}
-                  className="flex flex-col gap-2 py-3"
-                  data-testid={`provider-${p.key}`}
-                  data-provider-state={p.activation?.state ?? 'unknown'}
-                >
-                  <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <span className="font-medium">{p.label}</span>
-                    <code className="text-xs text-muted-foreground">{p.key}</code>
-                    {activation && activation.label !== 'Ready' && (
-                      <Badge tone={activation.tone}>Unavailable: {activation.label.toLowerCase()}</Badge>
-                    )}
-                    {activation && activation.label === 'Ready' && <Badge tone="good">Ready</Badge>}
-                    {!activation && reason && <Badge tone="neutral">Unavailable</Badge>}
-                  </div>
-                  {p.activation && p.activation.credentialRefs.length > 0 && (
-                    <p className="text-xs text-muted-foreground" data-testid="credential-refs">
-                      Credential references:{' '}
-                      {p.activation.credentialRefs
-                        .map((c) => `${c.name} (${c.present ? 'set' : 'not set'})`)
-                        .join(', ')}
-                      .
-                    </p>
-                  )}
-                  {p.activation && <CapabilityCertifications activation={p.activation} />}
-                  {reason && (
-                    <p className="text-xs text-muted-foreground" data-testid="unavailable-reason">
-                      {reason}
-                    </p>
-                  )}
-                  <ConnectButton
-                    brandId={brandId}
-                    providerKey={p.key}
-                    redirectUri={redirectUri}
-                    label={`Connect ${p.label}`}
-                    unavailable={reason}
-                    onUnavailable={(r) => setUnavailable((u) => ({ ...u, [p.key]: r }))}
-                  />
-                </li>
-              );
-            })}
-          </ul>
-        </Section>
-      )}
+                  provider={p}
+                  brandId={brandId}
+                  redirectUri={redirectUri}
+                  limits={limitsFor(p.key)}
+                  connected={connectedByKey(p.key)}
+                  reason={reasonFor(p)}
+                  onUnavailable={onUnavailable}
+                />
+              ))}
+            </ul>
+          )}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Tokens are envelope-encrypted and never shown. Only certified providers can publish; the server
+          refuses the others, and the reason is behind each platform&apos;s Details.
+        </p>
+      </section>
     </div>
   );
 }
