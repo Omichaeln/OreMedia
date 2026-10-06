@@ -29,6 +29,79 @@ export const DIRECTIONAL_LABEL = 'directional; not causal';
 export const conclusionText = (label: string): string =>
   label === 'causal_when_sound' ? 'Can support causal claims when design and execution are sound' : label;
 
+/** What the mode means for the claims a result can carry, in the interface's words, then the label verbatim. */
+const MODE_NOTE: Record<string, string> = {
+  randomised: 'Oremedia controls assignment.',
+  structured_comparison: 'Organic posting across matched slots; timing and audience differ.',
+};
+export const modeNote = (mode: string, conclusionLabel: string): string =>
+  `${MODE_NOTE[mode] ?? ''} ${conclusionText(conclusionLabel)}.`.trim();
+
+/** The list's second line: the arms compared, "A vs. B". */
+export const variantsLine = (variants: ReadonlyArray<{ label: string }>): string =>
+  variants.map((v) => v.label).join(' vs. ');
+
+/** The allocation with its split: "Matched slots, 50/50". */
+export function allocationText(
+  method: string,
+  variants: ReadonlyArray<{ allocationWeight: number }>,
+): string {
+  const total = variants.reduce((sum, v) => sum + v.allocationWeight, 0);
+  const split =
+    total > 0 ? variants.map((v) => Math.round((v.allocationWeight / total) * 100)).join('/') : '';
+  const name = method.replace(/_/g, ' ');
+  return `${name[0]?.toUpperCase() ?? ''}${name.slice(1)}${split ? `, ${split}` : ''}`;
+}
+
+/** A window in whole days when it is a whole number of days, otherwise in hours. */
+export const windowText = (hours: number): string =>
+  hours % 24 === 0 ? `${hours / 24} day${hours === 24 ? '' : 's'}` : `${hours} h`;
+
+export const stoppingText = (rule: { kind: string; alpha: number }): string =>
+  `${rule.kind === 'sequential_msprt' ? 'Sequential (mSPRT)' : 'Fixed horizon'}, α = ${rule.alpha}`;
+
+export interface Progress {
+  label: string;
+  /** 0 to 1. */
+  fraction: number;
+}
+
+/**
+ * The bar under the heading. With a result: the smallest arm against the pre-registered minimum sample. Running
+ * without one: how much of the observation window has passed (observations are not reported before a result, so
+ * the sample is not shown as if it were known). Not started: nothing has passed.
+ */
+export function experimentProgress(
+  x: {
+    startedAt: string | null;
+    observationWindowHours: number;
+    minSamplePerArm: number;
+    variants: ReadonlyArray<{ id: string }>;
+  },
+  result: { perVariant: Record<string, { n: number } | undefined> } | null,
+  now: Date = new Date(),
+): Progress {
+  const min = x.minSamplePerArm;
+  if (result) {
+    const smallest = Math.min(...x.variants.map((v) => result.perVariant[v.id]?.n ?? 0));
+    return {
+      label: `${smallest.toLocaleString()} / ${min.toLocaleString()} per arm`,
+      fraction: min > 0 ? Math.min(1, smallest / min) : 1,
+    };
+  }
+  if (x.startedAt) {
+    const total = x.observationWindowHours;
+    const elapsed = Math.max(0, (now.getTime() - Date.parse(x.startedAt)) / 3_600_000);
+    const shown = Math.min(elapsed, total);
+    const label =
+      total % 24 === 0
+        ? `Day ${Math.max(1, Math.ceil(shown / 24))} of ${total / 24} · window`
+        : `${Math.floor(shown)} h of ${total} h · window`;
+    return { label, fraction: total > 0 ? shown / total : 1 };
+  }
+  return { label: `Not started · minimum ${min.toLocaleString()} per arm`, fraction: 0 };
+}
+
 export const shortHash = (hash: string | null): string => (hash ? `${hash.slice(0, 12)}…` : '—');
 
 export const windowEnd = (startedAt: string, observationWindowHours: number): Date =>
@@ -63,13 +136,19 @@ export const formatRate = (rate: number | null): string =>
 
 export const formatPoints = (v: number): string => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(1)} pp`;
 
-export function estimateText(estimate: number | null, interval: readonly number[] | null): string {
-  if (estimate === null) return 'No estimate (no data in one arm).';
-  const ci =
-    interval && interval.length === 2
-      ? ` (95% interval ${formatPoints(interval[0] as number)} to ${formatPoints(interval[1] as number)})`
-      : '';
-  return `Difference ${formatPoints(estimate)}${ci}.`;
+/** The result's headline: the difference between the arms, or why there is none. */
+export const differenceText = (estimate: number | null): string =>
+  estimate === null ? 'No estimate (no data in one arm)' : `Difference ${formatPoints(estimate)}`;
+
+/** The line under it: the 95% interval and the p-value, each only when the method produced one. */
+export function intervalText(interval: readonly number[] | null, pValue: number | null): string {
+  const parts: string[] = [];
+  if (interval && interval.length === 2)
+    parts.push(
+      `95% interval ${formatPoints(interval[0] as number)} to ${formatPoints(interval[1] as number)}`,
+    );
+  if (pValue !== null) parts.push(`p = ${pValue.toFixed(3)}`);
+  return parts.join(' · ');
 }
 
 export interface VariantRow {

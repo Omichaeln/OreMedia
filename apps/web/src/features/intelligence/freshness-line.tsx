@@ -1,34 +1,38 @@
-import { Badge } from '@oremedia/ui';
-import { coverageText, freshnessText, type CoverageDto, type FreshnessDto } from './intelligence-helpers';
+import { toneGlyph } from '@oremedia/ui';
+import { coverageDetail, freshnessText, type CoverageDto, type FreshnessDto } from './intelligence-helpers';
 
 export interface FreshnessLineProps {
   freshness: FreshnessDto;
-  /** The view's coverage statement (spec 16.1) when it has one. */
+  /** The analysis's coverage statement (spec 16.1) when it has one. */
   coverage?: CoverageDto;
-  statement?: string;
   className?: string;
 }
 
 /**
  * Spec 15.2: freshness is displayed next to every number and stale data is visibly marked (with text). Spec 16.1:
- * the coverage statement is shown wherever listening outputs are displayed.
+ * the coverage statement is shown wherever listening outputs are displayed. Set as the interface's strip under the
+ * heading: a white ruled card, each part a dark label followed by its muted detail.
  */
-export function FreshnessLine({ freshness, coverage, statement, className }: FreshnessLineProps) {
+export function FreshnessLine({ freshness, coverage, className }: FreshnessLineProps) {
   return (
     <div
-      className={`mb-2 flex flex-col gap-1 text-xs text-muted-foreground ${className ?? ''}`}
+      className={`flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-border bg-card px-3.5 py-2.5 text-xs text-muted-foreground ${className ?? ''}`}
       data-testid="freshness"
     >
-      <p className="flex flex-wrap items-center gap-2">
-        <span>{freshnessText(freshness)}</span>
+      <span>
+        <span className="text-foreground">Freshness</span> {freshnessText(freshness)}
         {freshness.stale && freshness.asOf !== null && (
-          <Badge tone="warning" data-testid="stale">
-            Stale
-          </Badge>
+          <span className="text-status-warning" data-testid="stale">
+            {' · '}
+            <span className="sr-only">{toneGlyph.warning} </span>Stale
+          </span>
         )}
-      </p>
-      {coverage && <p data-testid="coverage">{coverageText(coverage)}</p>}
-      {statement && <p>{statement}</p>}
+      </span>
+      {coverage && (
+        <span data-testid="coverage">
+          <span className="text-foreground">Coverage</span> {coverageDetail(coverage)}
+        </span>
+      )}
     </div>
   );
 }
