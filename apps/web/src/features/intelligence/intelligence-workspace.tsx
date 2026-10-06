@@ -166,18 +166,21 @@ interface Analysis {
  * Spec 16.3 on demand: the person picks the analyst principal from those granted the brand (UX-08, as the run
  * form; never an id, RA-07) and sees what the run is held to; the workflow writes insights when it completes.
  */
-function AnalyseNowForm({
+export function AnalyseNowForm({
   brandId,
   onStarted,
+  defaultPeriodDays = 7,
 }: {
   brandId: string;
   onStarted: (run: AnalystRunDto) => void;
+  /** The review window the form starts with (Performance passes its own period). */
+  defaultPeriodDays?: number;
 }) {
   const trpc = useTRPC();
   const intent = useIntentKey();
   const principals = useAgentPrincipals(brandId);
   const [principalId, setPrincipalId] = useState('');
-  const [periodDays, setPeriodDays] = useState('7');
+  const [periodDays, setPeriodDays] = useState(String(defaultPeriodDays));
   const run = useMutation(
     trpc.intelligence.analyst.run.mutationOptions({
       ...mutationIntent(intent.key),

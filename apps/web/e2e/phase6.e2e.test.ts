@@ -342,6 +342,8 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   }, 30_000);
 
   it('create, pre-register (frozen hash shown), start and stop', async () => {
+    // The screen keeps the open experiment in the address; the created one is whichever id replaces it.
+    const shownBefore = new URL(page.url()).searchParams.get('experiment');
     await page.getByRole('button', { name: 'New experiment' }).click();
     await page.getByLabel('Hypothesis').fill('A question hook lifts enquiries');
     // RA-07: the metric comes from the dictionary and each arm is a content package picked by title; no key or
@@ -354,8 +356,11 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await page.locator('#x-v1-revision').click();
     await page.getByRole('option', { name: /Meet the team/ }).click();
     await page.getByRole('button', { name: 'Create draft' }).click();
-    await expect.poll(() => page.url(), { timeout: 15_000 }).toMatch(/experiment=exp_/);
-    const createdId = new URL(page.url()).searchParams.get('experiment') ?? '';
+    const shownNow = () => new URL(page.url()).searchParams.get('experiment');
+    await expect
+      .poll(() => (shownNow() !== shownBefore ? shownNow() : null), { timeout: 15_000 })
+      .toMatch(/^exp_/);
+    const createdId = shownNow() ?? '';
     expect(p6.experiment(createdId).design).toMatchObject({
       primaryMetricKey: 'clicks',
       guardrailMetricKeys: ['engagement_rate'],

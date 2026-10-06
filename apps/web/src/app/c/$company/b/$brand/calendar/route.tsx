@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router';
-import { Badge, Button, EmptyState, Skeleton } from '@oremedia/ui';
+import { Button, EmptyState, PageHeader, Skeleton, StatusDot, cn } from '@oremedia/ui';
 import { RequestError } from '../../../../../../components/request-state';
 import { PackageTitle } from '../../../../../../features/content/package-title';
 import { brandPath, useBrandContext } from '../../../../../../features/brand/brand-context';
-import { CalendarGrid } from '../../../../../../features/publishing/calendar-grid';
+import { CalendarGrid, channelLabel, timeLabel } from '../../../../../../features/publishing/calendar-grid';
 import { ChannelStatus } from '../../../../../../features/publishing/channel-status';
-import {
-  destinationLabel,
-  useDestinationMap,
-} from '../../../../../../features/destinations/use-destinations';
+import { useDestinationMap } from '../../../../../../features/destinations/use-destinations';
 import { PublicationDetail } from '../../../../../../features/publishing/publication-detail';
 import {
   dayKey,
@@ -35,16 +32,17 @@ const VIEWS: Array<[CalendarView, string]> = [
   ['week', 'Week'],
 ];
 
-const periodTitle = (view: CalendarView, key: string) =>
-  parseKey(key).toLocaleDateString(
-    undefined,
-    view === 'month'
-      ? { month: 'long', year: 'numeric', timeZone: 'UTC' }
-      : { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' },
-  );
+const periodTitle = (view: CalendarView, key: string) => {
+  const date = parseKey(key);
+  return view === 'month'
+    ? date.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' })
+    : `Week of ${date.toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' })}`;
+};
 
 /**
- * Spec 21.1 calendar: scheduling and per-channel outcomes. Spec 21.2 states: token expiry (channel banners),
+ * Spec 21.1 calendar: scheduling and per-channel outcomes, laid out as the supplied interface: the period as the
+ * title, Month / Week, ‹ Today ›, Schedule; the channel banners; the month grid (or the week's columns); the
+ * selected day's list; the open publication in a right drawer. Spec 21.2 states: token expiry (channel banners),
  * invalid media (variant findings in the schedule form), partial success and outcome_unknown with reconcile,
  * cancellation race and held with reasons (publication detail). The selected day and publication live in the URL
  * so a deep link opens the same view.
@@ -89,65 +87,86 @@ export function CalendarRoute() {
     update({ day: key });
   };
   const go = (direction: -1 | 1) => setAnchorKey((k) => shiftAnchor(k, view, direction));
+  const openPublication = (publicationId: string) => update({ publication: publicationId });
+  const closePublication = () => {
+    const id = selectedId;
+    update({ publication: null });
+    // Focus goes back to the row that opened the drawer when it is still on the page.
+    if (id) document.querySelector<HTMLButtonElement>(`[data-publication="${id}"]`)?.focus();
+  };
 
   return (
-    <main id="main" className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-8">
-      <header className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-xl font-semibold">{periodTitle(view, anchorKey)}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            {timeZone} · each channel is its own publication with its own outcome
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-1">
-          <div role="group" aria-label="View" className="flex gap-1">
-            {VIEWS.map(([v, label]) => (
-              <Button
-                key={v}
-                size="sm"
-                variant={view === v ? 'secondary' : 'ghost'}
-                aria-pressed={view === v}
-                onClick={() => update({ view: v })}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => go(-1)}
-            aria-label={view === 'month' ? 'Previous month' : 'Previous week'}
-          >
-            ‹
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => selectDay(todayKey)}>
-            Today
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => go(1)}
-            aria-label={view === 'month' ? 'Next month' : 'Next week'}
-          >
-            ›
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              void queryClient.invalidateQueries(trpc.publishing.publications.pathFilter());
-              void calendar.refetch();
-            }}
-            disabled={calendar.isFetching}
-          >
-            {calendar.isFetching ? 'Refreshing…' : 'Refresh'}
-          </Button>
-          <Button asChild size="sm" variant="primary">
-            <a href="#schedule">Schedule</a>
-          </Button>
-        </div>
-      </header>
+    <main
+      id="main"
+      className={cn(
+        'om-in flex w-full min-w-0 flex-col gap-[22px] px-4 py-8 sm:px-9 sm:pb-20 sm:pt-9',
+        // The open drawer takes the right 360 px (the interface's `calDetailW`): the content keeps that much
+        // padding plus the gutter, so the controls, the banner and the grid sit beside the drawer, never under it,
+        // and a focused control is never covered (WCAG 2.4.11).
+        selectedId !== null && 'md:pr-[calc(min(360px,92vw)+2.25rem)]',
+      )}
+    >
+      <PageHeader
+        title={periodTitle(view, anchorKey)}
+        description={`${timeZone} · each channel is its own publication with its own outcome`}
+        actions={
+          <>
+            <div
+              role="group"
+              aria-label="View"
+              className="flex h-7 overflow-hidden rounded-md border border-border bg-card"
+            >
+              {VIEWS.map(([v, label]) => (
+                <button
+                  key={v}
+                  type="button"
+                  aria-pressed={view === v}
+                  onClick={() => update({ view: v })}
+                  className={cn(
+                    'h-full px-2.5 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    view === v ? 'bg-secondary font-medium' : 'hover:bg-card-tint',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <Button
+              size="sm"
+              className="w-7 px-0"
+              onClick={() => go(-1)}
+              aria-label={view === 'month' ? 'Previous month' : 'Previous week'}
+            >
+              ‹
+            </Button>
+            <Button size="sm" onClick={() => selectDay(todayKey)}>
+              Today
+            </Button>
+            <Button
+              size="sm"
+              className="w-7 px-0"
+              onClick={() => go(1)}
+              aria-label={view === 'month' ? 'Next month' : 'Next week'}
+            >
+              ›
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                void queryClient.invalidateQueries(trpc.publishing.publications.pathFilter());
+                void calendar.refetch();
+              }}
+              disabled={calendar.isFetching}
+            >
+              {calendar.isFetching ? 'Refreshing…' : 'Refresh'}
+            </Button>
+            <Button asChild size="sm" variant="primary">
+              <a href="#schedule">Schedule</a>
+            </Button>
+          </>
+        }
+      />
       {channels.isError && (
         <RequestError
           error={channels.error}
@@ -159,7 +178,7 @@ export function CalendarRoute() {
         <ChannelStatus channels={channels.data} settingsHref={brandPath(companyId, brandId, 'settings')} />
       )}
 
-      <section aria-label="Calendar" className="flex flex-col gap-3">
+      <section aria-label="Calendar" className="flex min-w-0 flex-col gap-3">
         {calendar.isPending && <Skeleton label="Loading calendar" lines={4} />}
         {calendar.isError && (
           <RequestError
@@ -181,10 +200,14 @@ export function CalendarRoute() {
               selectedKey={selectedKey}
               onSelect={selectDay}
               byDay={byDay}
+              channels={channelMap}
+              destinations={destinationMap}
+              timeZone={timeZone}
+              selectedId={selectedId}
+              onOpen={openPublication}
             />
             {calendar.data.publications.length === 0 && (
               <EmptyState
-                className="mt-3"
                 title="No publications in this period"
                 description="Schedule a channel variant below; approved packages and mandates are the two authorities that release one."
               />
@@ -193,78 +216,76 @@ export function CalendarRoute() {
         )}
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section aria-labelledby="day-title" className="flex min-w-0 flex-col gap-2">
-          <h2
-            id="day-title"
-            className="border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
-          >
-            {parseKey(selectedKey).toLocaleDateString(undefined, {
-              weekday: 'long',
-              day: 'numeric',
-              month: 'long',
-              timeZone: 'UTC',
+      <section aria-labelledby="day-title" className="flex min-w-0 flex-col">
+        <h2 id="day-title" className="om-label mb-2">
+          {parseKey(selectedKey).toLocaleDateString(undefined, {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            timeZone: 'UTC',
+          })}
+        </h2>
+        {dayItems.length === 0 ? (
+          <p className="border-t border-border py-3 text-sm text-muted-foreground">
+            Nothing scheduled on this day.
+          </p>
+        ) : (
+          <ul className="flex flex-col" aria-label="Publications" data-testid="day-list">
+            {dayItems.map((p) => {
+              const chip = publicationChip(p.state, p.remoteStatus);
+              const selected = p.publicationId === selectedId;
+              const target = channelLabel(p, channelMap, destinationMap);
+              return (
+                <li key={p.publicationId}>
+                  <button
+                    type="button"
+                    data-publication={p.publicationId}
+                    aria-pressed={selected}
+                    onClick={() => openPublication(p.publicationId)}
+                    className={cn(
+                      'grid w-full grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-x-3.5 border-t border-border px-1.5 py-3 text-left text-sm',
+                      'md:grid-cols-[52px_minmax(0,1fr)_minmax(0,180px)_minmax(0,170px)]',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                      selected ? 'bg-secondary' : 'hover:bg-muted',
+                    )}
+                  >
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {timeLabel(p.scheduledFor, timeZone)}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate">
+                        <PackageTitle contentPackageId={p.contentPackageId} />
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground md:hidden">
+                        {target} · <code>{p.publicationId}</code>
+                      </span>
+                    </span>
+                    <span className="hidden min-w-0 text-muted-foreground md:block">
+                      <span className="block truncate">{target}</span>
+                      <code className="block truncate text-2xs">{p.publicationId}</code>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <StatusDot tone={chip.tone} size="sm" />
+                      {chip.label}
+                    </span>
+                  </button>
+                </li>
+              );
             })}
-          </h2>
-          {dayItems.length === 0 ? (
-            <p className="text-sm text-muted-foreground">Nothing scheduled on this day.</p>
-          ) : (
-            <ul
-              className="flex flex-col divide-y divide-border"
-              aria-label="Publications"
-              data-testid="day-list"
-            >
-              {dayItems.map((p) => {
-                const chip = publicationChip(p.state, p.remoteStatus);
-                const channel = p.channelConnectionId ? channelMap.get(p.channelConnectionId) : undefined;
-                const website = p.destinationId
-                  ? destinationLabel(destinationMap.get(p.destinationId), p.destinationId)
-                  : null;
-                const selected = p.publicationId === selectedId;
-                return (
-                  <li key={p.publicationId}>
-                    <button
-                      type="button"
-                      aria-pressed={selected}
-                      onClick={() => update({ publication: p.publicationId })}
-                      className={`grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 px-2 py-2.5 text-left text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring ${selected ? 'bg-secondary' : 'hover:bg-muted'}`}
-                    >
-                      <span className="font-mono text-xs tabular-nums text-muted-foreground">
-                        {new Date(p.scheduledFor).toLocaleTimeString(undefined, {
-                          hour: '2-digit',
-                          minute: '2-digit',
-                          timeZone,
-                        })}
-                      </span>
-                      <span className="min-w-0">
-                        <span className="block truncate font-medium">
-                          <PackageTitle contentPackageId={p.contentPackageId} />
-                        </span>
-                        <span className="block truncate text-xs text-muted-foreground">
-                          {website ??
-                            (channel
-                              ? `${channel.displayName} (${channel.providerKey})`
-                              : p.channelConnectionId)}
-                          {' · '}
-                          <code>{p.publicationId}</code>
-                        </span>
-                      </span>
-                      <Badge tone={chip.tone}>{chip.label}</Badge>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </section>
+          </ul>
+        )}
+      </section>
+
+      {selectedId !== null && (
         <PublicationDetail
           brandId={brandId}
           publicationId={selectedId}
           channels={channelMap}
           destinations={destinationMap}
           timeZone={timeZone}
+          onClose={closePublication}
         />
-      </div>
+      )}
 
       <div id="schedule" className="scroll-mt-4">
         <ScheduleForm
