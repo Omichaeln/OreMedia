@@ -9,6 +9,7 @@ import {
 } from '@oremedia/contracts/brand';
 import { Badge, Field, Skeleton, Textarea, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
+import { Section } from '../../components/section';
 import { AssetThumb } from '../assets/asset-thumb';
 import { useAsset } from '../assets/use-assets';
 import { useChannelLimits } from '../publishing/use-publishing';
@@ -32,9 +33,7 @@ type Colour = Doc['tokens']['colours'][number];
 export function ReadSection({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-3">
-      <h3 className="border-b border-border pb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h3>
+      <h3 className="om-label border-b border-border pb-2">{title}</h3>
       {children}
     </section>
   );
@@ -79,9 +78,9 @@ const ROLE_GROUPS: Array<[string, Colour['role'][]]> = [
 
 function Swatch({ c }: { c: Colour }) {
   return (
-    <li className="flex w-40 flex-col gap-1">
+    <li className="flex flex-col gap-1">
       <span
-        className="flex h-20 items-end rounded-md border border-border p-2 text-sm font-medium"
+        className="flex h-[88px] items-end rounded-xl border border-black/10 p-2.5 text-xs font-medium"
         style={{ background: c.value, color: inkOn(c.value) }}
         aria-hidden="true"
       >
@@ -119,7 +118,7 @@ export function ColourView({ doc }: { doc: Doc }) {
         const group = colours.filter((c) => roles.includes(c.role));
         return group.length === 0 ? null : (
           <ReadSection key={title} title={title}>
-            <ul className="flex flex-wrap gap-4">
+            <ul className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-3.5">
               {group.map((c) => (
                 <Swatch key={c.key} c={c} />
               ))}
@@ -133,9 +132,12 @@ export function ColourView({ doc }: { doc: Doc }) {
             {pairs.map(({ fg, bg, ratio }) => {
               const v = ratio === null ? null : verdict(ratio);
               return (
-                <li key={`${fg.key}-${bg.key}`} className="flex flex-wrap items-center gap-3 py-2 text-sm">
+                <li
+                  key={`${fg.key}-${bg.key}`}
+                  className="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-x-4 gap-y-1 py-2.5 text-sm sm:grid-cols-[120px_minmax(0,1fr)_80px_110px]"
+                >
                   <span
-                    className="w-28 rounded-md border border-border px-2 py-1.5 font-medium"
+                    className="flex h-9 items-center rounded-md border border-black/10 px-2.5 font-medium"
                     style={{ background: bg.value, color: fg.value }}
                     aria-hidden="true"
                   >
@@ -162,7 +164,9 @@ const Chips = ({ items }: { items: string[] }) => (
   <ul className="flex flex-wrap gap-1.5">
     {items.map((t) => (
       <li key={t}>
-        <Badge glyph={false}>{t}</Badge>
+        <Badge variant="pill" glyph={false} className="px-2.5 py-[3px] font-normal text-foreground">
+          {t}
+        </Badge>
       </li>
     ))}
   </ul>
@@ -392,60 +396,96 @@ export function GuidelinesView({ doc }: { doc: Doc }) {
   );
 }
 
-/** The overview: the voice beside the palette, then one tile per part of the system with what it holds. */
+/** The darkest colour of the palette carries the statement card, as the interface's dark card does. */
+const darkest = (colours: Colour[]): Colour | undefined =>
+  [...colours].sort((a, b) => (contrast(b.value, '#ffffff') ?? 0) - (contrast(a.value, '#ffffff') ?? 0))[0];
+
+/**
+ * The overview as the interface lays it out: the statement card (the brand's name, its positioning, three swatches)
+ * beside the voice summary and its tone chips, then one ruled card per heading with what it holds, and how the
+ * brand system is used.
+ */
 export function OverviewView({
   doc,
   brandName,
   factCount,
+  proposedFactCount,
   onOpen,
 }: {
   doc: Doc;
   brandName: string;
   factCount: number | undefined;
+  proposedFactCount: number | undefined;
   onOpen: (section: string) => void;
 }) {
+  const rules = doc.logoRules;
+  const patterns = doc.patterns.filter((p) => p.key !== REFERENCE_PATTERN);
+  const fontFiles = new Set(doc.tokens.typeRoles.map((r) => r.fontAssetId)).size;
   const tiles: Array<[string, string, string]> = [
-    ['logo', 'Logo', `${doc.logoRules.length} variant${doc.logoRules.length === 1 ? '' : 's'}`],
-    ['colour', 'Colour', `${doc.tokens.colours.length} tokens · ${doc.tokens.contrastTarget} target`],
-    ['typography', 'Typography', `${doc.tokens.typeRoles.length} roles`],
+    [
+      'logo',
+      'Logo',
+      rules.length === 0
+        ? 'No variants yet'
+        : `${count(rules.length, 'variant')} · clear space ${rules[0]?.clearSpaceRatio}× · min ${Math.min(...rules.map((r) => r.minWidthPx))} px`,
+    ],
+    [
+      'colour',
+      'Colour',
+      `${count(doc.tokens.colours.length, 'token')} · ${doc.tokens.contrastTarget} contrast target`,
+    ],
+    [
+      'typography',
+      'Typography',
+      `${count(fontFiles, 'font file')} · ${count(doc.tokens.typeRoles.length, 'role')}`,
+    ],
     [
       'voice',
-      'Voice & personality',
-      `${doc.voice.tone.length} tone words · ${doc.voice.preferredTerms.length} preferred terms · ${doc.voice.prohibitedPhrases.length} prohibited`,
+      'Voice & writing',
+      `${count(doc.voice.tone.length, 'tone word')} · ${count(doc.voice.preferredTerms.length, 'preferred term')} · ${doc.voice.prohibitedPhrases.length} prohibited`,
     ],
-    [
-      'messaging',
-      'Messaging',
-      `${count(doc.messaging?.pillars.length ?? 0, 'pillar')} · ${count(doc.messaging?.keyMessages.length ?? 0, 'key message')}`,
-    ],
-    ['vocabulary', 'Vocabulary', count(doc.vocabulary?.length ?? 0, 'term')],
-    ['writing', 'Writing patterns', count(Object.keys(doc.writingPatterns ?? {}).length, 'part')],
-    ['examples', 'Examples', count(doc.voice.examples.length, 'example')],
-    ['templates', 'Templates', count(doc.copyTemplates?.length ?? 0, 'copy template')],
     [
       'imagery',
       'Imagery',
-      `${doc.patterns.find((p) => p.key === REFERENCE_PATTERN)?.exampleAssetIds.length ?? 0} reference images`,
+      count(
+        doc.patterns.find((p) => p.key === REFERENCE_PATTERN)?.exampleAssetIds.length ?? 0,
+        'reference image',
+      ),
     ],
     [
       'patterns',
-      'Visual patterns',
-      count(doc.patterns.filter((p) => p.key !== REFERENCE_PATTERN).length, 'pattern'),
+      'Patterns',
+      `${count(patterns.length, 'pattern')} · ${count(doc.copyTemplates?.length ?? 0, 'template')}`,
     ],
-    ['channels', 'Channels', doc.channelGuidance.map((c) => c.providerKey).join(', ') || 'No guidance'],
-    ['facts', 'Facts', factCount === undefined ? '…' : `${factCount} in effect`],
+    [
+      'channels',
+      'Channels',
+      doc.channelGuidance.map((c) => channelLabel(c.providerKey)).join(', ') || 'No guidance',
+    ],
+    [
+      'facts',
+      'Facts',
+      factCount === undefined
+        ? '…'
+        : `${factCount} in effect${proposedFactCount !== undefined ? ` · ${proposedFactCount} proposed` : ''}`,
+    ],
   ];
-  const accent = doc.tokens.colours.find((c) => c.role === 'primary') ?? doc.tokens.colours[0];
+  const ink = darkest(doc.tokens.colours);
+  const swatches = doc.tokens.colours.filter((c) => c.key !== ink?.key).slice(0, 3);
+  const statement = doc.messaging?.positioning || doc.messaging?.valueProposition || null;
   return (
-    <div className="flex flex-col gap-8">
-      <div className="grid gap-6 lg:grid-cols-2">
+    <div className="flex max-w-[800px] flex-col gap-9">
+      <div className="grid items-start gap-8 md:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
         <div
-          className="flex min-h-48 flex-col justify-between rounded-lg border border-border p-6"
-          style={accent ? { background: accent.value, color: inkOn(accent.value) } : undefined}
+          className="flex aspect-[4/3] flex-col justify-between rounded-xl border border-border bg-primary p-7 text-primary-foreground"
+          style={ink ? { background: ink.value, color: inkOn(ink.value) } : undefined}
         >
-          <p className="text-xs font-semibold uppercase tracking-widest">{brandName}</p>
+          <p className="text-sm font-bold uppercase tracking-[0.2em]">{brandName}</p>
+          {statement && (
+            <p className="text-balance text-[30px] font-bold leading-[1.1] tracking-title">{statement}</p>
+          )}
           <ul className="flex gap-1.5" aria-label="Palette">
-            {doc.tokens.colours.slice(0, 6).map((c) => (
+            {swatches.map((c) => (
               <li
                 key={c.key}
                 title={`${c.key} ${c.value}`}
@@ -457,40 +497,39 @@ export function OverviewView({
             ))}
           </ul>
         </div>
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-4">
           {doc.voice.summary ? (
-            <p className="text-base leading-relaxed">{doc.voice.summary}</p>
+            <p className="text-pretty text-md leading-[1.55]">{doc.voice.summary}</p>
           ) : (
             nothing('voice summary')
           )}
           {doc.voice.tone.length > 0 && <Chips items={doc.voice.tone} />}
         </div>
       </div>
-      <ul className="grid overflow-hidden rounded-md border border-border sm:grid-cols-2 lg:grid-cols-4">
-        {tiles.map(([key, title, detail]) => (
-          <li key={key} className="border-b border-r border-border">
+      <ul className="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-px overflow-hidden rounded-xl border border-border bg-border">
+        {tiles.map(([key, title, detail], i) => (
+          <li key={key} className="om-in" style={{ animationDelay: `${i * 40}ms` }}>
             <button
               type="button"
               onClick={() => onOpen(key)}
               className={cn(
-                'flex h-full w-full flex-col gap-1 bg-background p-4 text-left hover:bg-secondary',
+                'flex h-full w-full flex-col items-start gap-1.5 bg-card p-4 text-left hover:bg-card-tint',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
               )}
             >
               <span className="text-sm font-medium">{title}</span>
-              <span className="text-xs text-muted-foreground">{detail}</span>
+              <span className="text-pretty text-xs text-muted-foreground">{detail}</span>
             </button>
           </li>
         ))}
       </ul>
-      <ReadSection title="How this is used">
-        <p className="max-w-prose text-sm text-muted-foreground">
-          Every save of the brand system is kept as a record, and every document revision records the one it
-          was designed against. Agents read an immutable snapshot of the brand system, the approved facts and
-          the active objective; imported guideline text is evidence, never permission. These tokens style
-          creative documents only, never this application.
+      <Section id="how-this-is-used" title="How this is used">
+        <p className="text-pretty text-sm text-muted-foreground">
+          Every document revision records the brand system it was designed against. Agents read an immutable
+          snapshot of the brand system, approved facts and active objective — guideline text is evidence,
+          never permission. Brand tokens style creative documents only.
         </p>
-      </ReadSection>
+      </Section>
     </div>
   );
 }
