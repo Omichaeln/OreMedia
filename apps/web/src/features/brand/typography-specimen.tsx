@@ -25,7 +25,7 @@ import {
 type Doc = BrandSystemDocumentV1;
 type TypeRole = Doc['tokens']['typeRoles'][number];
 
-const heading = 'text-xs font-semibold uppercase tracking-wide text-muted-foreground';
+const heading = 'om-label';
 
 /**
  * Whether the browser draws `family` at weight `b` with different ink from weight `a`. Faces are registered for
