@@ -20,6 +20,7 @@ import { ReviewInboxRoute } from './c/$company/b/$brand/review/route';
 import { AgentRunsRoute } from './c/$company/b/$brand/agents/route';
 import { IntelligenceRoute } from './c/$company/b/$brand/intelligence/route';
 import { PerformanceRoute } from './c/$company/b/$brand/performance/route';
+import { ReportsRoute } from './c/$company/b/$brand/reports/route';
 import { OverviewRoute } from './c/$company/b/$brand/overview/route';
 import { InboxRoute } from './c/$company/b/$brand/inbox/route';
 import { ExperimentsRoute } from './c/$company/b/$brand/experiments/route';
@@ -141,6 +142,8 @@ export function createAppRouter({ trpcFor, queryClient }: RouterDeps) {
                 ),
             },
             // The review, inbox, experiments and campaigns lists page with useCursorPages (their own key), so nothing to prefetch.
+            // Reports: its month comes from the URL and the brand zone; the figures are composed on demand.
+            { path: 'reports', Component: ReportsRoute },
             { path: 'inbox', Component: InboxRoute },
             {
               path: 'intelligence',

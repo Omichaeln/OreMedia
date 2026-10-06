@@ -60,6 +60,7 @@ const SCREENS: Screen[] = [
     path: brandPath('performance'),
     ready: (p) => p.getByRole('group', { name: 'Metric' }).waitFor(),
   },
+  { name: 'reports', path: brandPath('reports'), ready: (p) => p.getByTestId('report-page-cover').waitFor() },
   { name: 'inbox', path: brandPath('inbox'), ready: h1 },
   { name: 'intelligence', path: brandPath('intelligence'), ready: h1 },
   { name: 'experiments', path: brandPath('experiments'), ready: h1 },

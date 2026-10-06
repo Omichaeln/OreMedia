@@ -30,6 +30,7 @@
     "@oremedia/module-operations": "workspace:*",
     "@oremedia/module-overview": "workspace:*",
     "@oremedia/module-publishing": "workspace:*",
+    "@oremedia/module-reports": "workspace:*",
     "@oremedia/module-review": "workspace:*",
     "@oremedia/module-skills": "workspace:*",
     "@oremedia/observability": "workspace:*",

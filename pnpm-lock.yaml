@@ -135,6 +135,9 @@ importers:
       '@oremedia/module-publishing':
         specifier: workspace:*
         version: link:../../packages/modules/publishing
+      '@oremedia/module-reports':
+        specifier: workspace:*
+        version: link:../../packages/modules/reports
       '@oremedia/module-review':
         specifier: workspace:*
         version: link:../../packages/modules/review
@@ -289,6 +292,9 @@ importers:
       '@oremedia/module-overview':
         specifier: workspace:*
         version: link:../../packages/modules/overview
+      '@oremedia/module-reports':
+        specifier: workspace:*
+        version: link:../../packages/modules/reports
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.0(@types/node@22.20.4)(esbuild@0.28.2)(jiti@2.7.0)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
@@ -1267,6 +1273,51 @@ importers:
       '@oremedia/providers':
         specifier: workspace:*
         version: link:../../providers
+      drizzle-orm:
+        specifier: ^0.45.3
+        version: 0.45.3(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(mysql2@3.24.4(@types/node@22.20.4))
+      zod:
+        specifier: ^3.25.76
+        version: 3.25.76
+
+  packages/modules/reports:
+    dependencies:
+      '@oremedia/contracts':
+        specifier: workspace:*
+        version: link:../../contracts
+      '@oremedia/db':
+        specifier: workspace:*
+        version: link:../../db
+      '@oremedia/domain':
+        specifier: workspace:*
+        version: link:../../domain
+      '@oremedia/module-access':
+        specifier: workspace:*
+        version: link:../access
+      '@oremedia/module-billing':
+        specifier: workspace:*
+        version: link:../billing
+      '@oremedia/module-brand':
+        specifier: workspace:*
+        version: link:../brand
+      '@oremedia/module-content':
+        specifier: workspace:*
+        version: link:../content
+      '@oremedia/module-intelligence':
+        specifier: workspace:*
+        version: link:../intelligence
+      '@oremedia/module-measurement':
+        specifier: workspace:*
+        version: link:../measurement
+      '@oremedia/module-operations':
+        specifier: workspace:*
+        version: link:../operations
+      '@oremedia/module-publishing':
+        specifier: workspace:*
+        version: link:../publishing
+      '@oremedia/observability':
+        specifier: workspace:*
+        version: link:../../observability
       drizzle-orm:
         specifier: ^0.45.3
         version: 0.45.3(@opentelemetry/api@1.9.1)(@types/pg@8.15.6)(mysql2@3.24.4(@types/node@22.20.4))

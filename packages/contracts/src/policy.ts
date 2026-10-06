@@ -41,6 +41,9 @@ export const Action = z.enum([
   'billing.manage',
   'membership.manage',
   'audit.read',
+  /** D-29 client reports: editing a draft (its summary, sections and text) and recording a send. */
+  'report.edit',
+  'report.send',
 ]);
 export type Action = z.infer<typeof Action>;
 

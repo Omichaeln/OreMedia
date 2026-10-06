@@ -327,7 +327,11 @@ export const LATER_COLUMNS: Readonly<Record<string, readonly string[]>> = {
 };
 
 /** Tables created after every head the older roll-forward suites seed; their snapshots leave them out. */
-export const LATER_TABLE_NAMES: readonly string[] = ['studio_video_jobs']; // 0028
+export const LATER_TABLE_NAMES: readonly string[] = [
+  'studio_video_jobs', // 0028
+  'reports', // 0033
+  'report_preferences', // 0033
+];
 
 /** The table's columns that exist at every head the roll-forward suites seed (LATER_COLUMNS left out). */
 export function snapshotColumns(table: MySqlTable): Record<string, MySqlColumn> {

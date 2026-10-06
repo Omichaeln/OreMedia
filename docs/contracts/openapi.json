@@ -169,7 +169,9 @@
                         "community:read",
                         "community:write",
                         "destinations:read",
-                        "destinations:write"
+                        "destinations:write",
+                        "reports:read",
+                        "reports:write"
                       ]
                     }
                   },
@@ -495,7 +497,9 @@
                             "inbox.respond",
                             "billing.manage",
                             "membership.manage",
-                            "audit.read"
+                            "audit.read",
+                            "report.edit",
+                            "report.send"
                           ]
                         },
                         "brandIds": {
@@ -16423,6 +16427,317 @@
         }
       }
     },
+    "/trpc/reports.ask": {
+      "post": {
+        "operationId": "reports.ask",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "periodMonth": {
+                    "type": "string"
+                  },
+                  "compareMode": {
+                    "type": "string",
+                    "enum": ["previous_month", "last_year"]
+                  },
+                  "question": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "periodMonth", "question"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.delivery": {
+      "get": {
+        "operationId": "reports.delivery",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.draftSummary": {
+      "post": {
+        "operationId": "reports.draftSummary",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "periodMonth": {
+                    "type": "string"
+                  },
+                  "compareMode": {
+                    "type": "string",
+                    "enum": ["previous_month", "last_year"]
+                  },
+                  "instruction": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "periodMonth"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.figures": {
+      "get": {
+        "operationId": "reports.figures",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "periodMonth": {
+                    "type": "string"
+                  },
+                  "compareMode": {
+                    "type": "string",
+                    "enum": ["previous_month", "last_year"]
+                  }
+                },
+                "required": ["brandId", "periodMonth"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.get": {
+      "get": {
+        "operationId": "reports.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "periodMonth": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "periodMonth"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.list": {
+      "get": {
+        "operationId": "reports.list",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "page": {
+                    "type": "object",
+                    "properties": {
+                      "cursor": {
+                        "type": "string"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": []
+                  }
+                },
+                "required": ["brandId", "page"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.markSent": {
+      "post": {
+        "operationId": "reports.markSent",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "reportId": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "sentTo": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId", "reportId", "expectedVersion", "sentTo"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.preferences.get": {
+      "get": {
+        "operationId": "reports.preferences.get",
+        "x-trpc-type": "query",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["brandId"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.preferences.set": {
+      "post": {
+        "operationId": "reports.preferences.set",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "autoDraft": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["brandId", "autoDraft"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/trpc/reports.save": {
+      "post": {
+        "operationId": "reports.save",
+        "x-trpc-type": "mutation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "brandId": {
+                    "type": "string"
+                  },
+                  "periodMonth": {
+                    "type": "string"
+                  },
+                  "expectedVersion": {
+                    "type": "number"
+                  },
+                  "fields": {
+                    "type": "object",
+                    "properties": {
+                      "compareMode": {
+                        "type": "string",
+                        "enum": ["previous_month", "last_year"]
+                      },
+                      "sections": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": ["cover", "overview", "channels", "posts", "recommendations"]
+                        }
+                      },
+                      "executiveSummary": {
+                        "type": "string"
+                      },
+                      "recommendations": {
+                        "type": "string"
+                      },
+                      "preparedFor": {
+                        "type": "string"
+                      },
+                      "preparedBy": {
+                        "type": "string"
+                      },
+                      "theme": {
+                        "type": "string",
+                        "enum": ["dark", "light"]
+                      }
+                    },
+                    "required": [
+                      "compareMode",
+                      "sections",
+                      "executiveSummary",
+                      "recommendations",
+                      "preparedFor",
+                      "preparedBy",
+                      "theme"
+                    ]
+                  }
+                },
+                "required": ["brandId", "periodMonth", "fields"]
+              }
+            }
+          }
+        }
+      }
+    },
     "/trpc/review.approvals.get": {
       "get": {
         "operationId": "review.approvals.get",
@@ -19340,7 +19655,9 @@
                   "community:read",
                   "community:write",
                   "destinations:read",
-                  "destinations:write"
+                  "destinations:write",
+                  "reports:read",
+                  "reports:write"
                 ]
               }
             },
@@ -19579,7 +19896,9 @@
                       "inbox.respond",
                       "billing.manage",
                       "membership.manage",
-                      "audit.read"
+                      "audit.read",
+                      "report.edit",
+                      "report.send"
                     ]
                   },
                   "brandIds": {
@@ -33288,6 +33607,227 @@
             }
           },
           "required": ["publicationId"]
+        }
+      },
+      "reports.ask": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "periodMonth": {
+              "type": "string"
+            },
+            "compareMode": {
+              "type": "string",
+              "enum": ["previous_month", "last_year"]
+            },
+            "question": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "periodMonth", "question"]
+        }
+      },
+      "reports.delivery": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "reports.draftSummary": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "periodMonth": {
+              "type": "string"
+            },
+            "compareMode": {
+              "type": "string",
+              "enum": ["previous_month", "last_year"]
+            },
+            "instruction": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "periodMonth"]
+        }
+      },
+      "reports.figures": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "periodMonth": {
+              "type": "string"
+            },
+            "compareMode": {
+              "type": "string",
+              "enum": ["previous_month", "last_year"]
+            }
+          },
+          "required": ["brandId", "periodMonth"]
+        }
+      },
+      "reports.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "periodMonth": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "periodMonth"]
+        }
+      },
+      "reports.list": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "page": {
+              "type": "object",
+              "properties": {
+                "cursor": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "number"
+                }
+              },
+              "required": []
+            }
+          },
+          "required": ["brandId", "page"]
+        }
+      },
+      "reports.markSent": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "reportId": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "sentTo": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId", "reportId", "expectedVersion", "sentTo"]
+        }
+      },
+      "reports.preferences.get": {
+        "type": "query",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            }
+          },
+          "required": ["brandId"]
+        }
+      },
+      "reports.preferences.set": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "autoDraft": {
+              "type": "boolean"
+            }
+          },
+          "required": ["brandId", "autoDraft"]
+        }
+      },
+      "reports.save": {
+        "type": "mutation",
+        "input": {
+          "type": "object",
+          "properties": {
+            "brandId": {
+              "type": "string"
+            },
+            "periodMonth": {
+              "type": "string"
+            },
+            "expectedVersion": {
+              "type": "number"
+            },
+            "fields": {
+              "type": "object",
+              "properties": {
+                "compareMode": {
+                  "type": "string",
+                  "enum": ["previous_month", "last_year"]
+                },
+                "sections": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": ["cover", "overview", "channels", "posts", "recommendations"]
+                  }
+                },
+                "executiveSummary": {
+                  "type": "string"
+                },
+                "recommendations": {
+                  "type": "string"
+                },
+                "preparedFor": {
+                  "type": "string"
+                },
+                "preparedBy": {
+                  "type": "string"
+                },
+                "theme": {
+                  "type": "string",
+                  "enum": ["dark", "light"]
+                }
+              },
+              "required": [
+                "compareMode",
+                "sections",
+                "executiveSummary",
+                "recommendations",
+                "preparedFor",
+                "preparedBy",
+                "theme"
+              ]
+            }
+          },
+          "required": ["brandId", "periodMonth", "fields"]
         }
       },
       "review.approvals.get": {

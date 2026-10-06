@@ -22,6 +22,7 @@ import * as intelligenceSchema from '@oremedia/db/schema/intelligence';
 import * as measurementSchema from '@oremedia/db/schema/measurement';
 import * as operationsSchema from '@oremedia/db/schema/operations';
 import * as publishingSchema from '@oremedia/db/schema/publishing';
+import * as reportsSchema from '@oremedia/db/schema/reports';
 import * as reviewSchema from '@oremedia/db/schema/review';
 import * as skillsSchema from '@oremedia/db/schema/skills';
 import { UserDirectory } from '@oremedia/module-access';
@@ -104,6 +105,7 @@ const MODULE_TABLES: ReadonlyArray<[name: string, module: Record<string, unknown
   ['destinations', destinationsSchema],
   ['intelligence', intelligenceSchema],
   ['experiments', experimentsSchema],
+  ['reports', reportsSchema],
   ['content', contentSchema],
   ['creative', creativeSchema],
   ['assets', assetsSchema],
