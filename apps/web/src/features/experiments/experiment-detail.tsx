@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Badge, Button, Field, Input, Skeleton, StatusBanner, StatusDot, cn, toneGlyph } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
+import { Section } from '../../components/section';
 import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
@@ -32,28 +33,6 @@ export interface ExperimentDetailProps {
 /** The detail column's gutter: the interface's 32 × 36 px, less at phone width (as the agents' run detail). */
 const GUTTER = 'px-5 py-6 sm:px-9 sm:py-8';
 
-/** A ruled section with the interface's uppercase label ("Result", "Pre-registration"). */
-function Block({
-  id,
-  title,
-  testId,
-  children,
-}: {
-  id: string;
-  title: string;
-  testId?: string;
-  children: ReactNode;
-}) {
-  return (
-    <section aria-labelledby={id} className="flex flex-col" data-testid={testId}>
-      <h3 id={id} className="om-label mb-2">
-        {title}
-      </h3>
-      {children}
-    </section>
-  );
-}
-
 /**
  * The result as the interface sets it: one ruled row per arm (n, successes, rate), then the difference and the
  * verdict in bold, the interval and p-value, the guardrails and the conclusion label (verbatim) in muted lines.
@@ -77,11 +56,11 @@ function ResultView({ result, experiment }: { result: ResultDto; experiment: Exp
             <th scope="col">Rate</th>
           </tr>
         </thead>
-        <tbody>
+        <tbody className="divide-y divide-border">
           {experiment.variants.map((v) => {
             const o = result.perVariant[v.id];
             return (
-              <tr key={v.id} className="border-t border-border">
+              <tr key={v.id}>
                 <th scope="row" className="py-2.5 pr-3 text-left font-normal">
                   {v.label}
                 </th>
@@ -373,7 +352,7 @@ export function ExperimentDetail({ experimentId }: ExperimentDetailProps) {
           <div className="h-full bg-primary" style={{ width: `${Math.round(progress.fraction * 100)}%` }} />
         </div>
       </div>
-      <Block id="result-heading" title="Result" testId="results">
+      <Section id="result-heading" title="Result" testId="results" level={3}>
         {results.isPending && <Skeleton label="Loading results" />}
         {results.isError && <RequestError error={results.error} onRetry={() => void results.refetch()} />}
         {latest && <ResultView result={latest} experiment={x} />}
@@ -386,17 +365,17 @@ export function ExperimentDetail({ experimentId }: ExperimentDetailProps) {
           </div>
         )}
         {(x.state === 'running' || x.state === 'stopped') && x.preRegistrationHash && (
-          <div className="mt-4 border-t border-border pt-4">
+          <div className="mt-2 border-t border-border pt-4">
             <ComputeResultsForm key={x.version} experiment={x} />
           </div>
         )}
-      </Block>
-      <Block id="prereg-heading" title="Pre-registration">
-        <dl className="flex flex-col">
+      </Section>
+      <Section id="prereg-heading" title="Pre-registration" level={3}>
+        <dl className="flex flex-col divide-y divide-border">
           {rows.map((r) => (
             <div
               key={r.k}
-              className="grid grid-cols-[minmax(0,110px)_minmax(0,1fr)] gap-4 border-t border-border py-2.5 text-sm sm:grid-cols-[140px_minmax(0,1fr)]"
+              className="grid grid-cols-[minmax(0,110px)_minmax(0,1fr)] gap-4 py-2.5 text-sm sm:grid-cols-[140px_minmax(0,1fr)]"
             >
               <dt className="text-muted-foreground">{r.k}</dt>
               <dd className="min-w-0 text-pretty" data-testid={r.testId}>
@@ -405,7 +384,7 @@ export function ExperimentDetail({ experimentId }: ExperimentDetailProps) {
             </div>
           ))}
         </dl>
-      </Block>
+      </Section>
       {actionUi && actionUi.kind === 'forbidden' && (
         <StatusBanner
           tone="critical"

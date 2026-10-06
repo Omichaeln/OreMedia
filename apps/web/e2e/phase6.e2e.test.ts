@@ -64,7 +64,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
 
   // ---- intelligence workspace (spec 16.9; spec 21.2 intelligence states) ----
 
-  it('loading, then What changed with freshness, coverage, partial coverage and anomalies as text and table', async () => {
+  it('loading, then What changed with freshness, coverage, partial coverage and anomalies as text', async () => {
     // The workspace itself is prefetched by the route loader; the anomalies below it load in the screen.
     backend.delays.set('intelligence.anomalies.list', 1_500);
     // The screen opens on "What to do next", as the interface does; What changed is its own view.
