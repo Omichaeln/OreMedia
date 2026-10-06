@@ -103,7 +103,10 @@ interface Run {
   steps: Step[];
 }
 
-const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+// One clock reading for the whole fixture: runs built in the same tick must not straddle a millisecond and
+// reorder "newest first" (ties fall back to the id, as on the server).
+const fixtureNow = Date.now();
+const at = (minutesAgo: number) => new Date(fixtureNow - minutesAgo * 60_000).toISOString();
 const rid = (p: string) => `${p}_${randomUUID().replace(/-/g, '').slice(0, 26).toUpperCase()}`;
 let stepIndex = 0;
 const step = (kind: Step['kind'], summary: string, over: Partial<Step> = {}): Step => ({
