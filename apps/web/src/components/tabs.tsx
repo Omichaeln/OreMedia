@@ -5,8 +5,9 @@ import { cn } from '@oremedia/ui';
 export const Tabs = RadixTabs.Root;
 
 /**
- * `line` (default): tabs over a rule, the active one underlined in the accent. `pill`: the interface's panel tabs
- * (the studio's side panels), small buttons with the active one on the secondary fill and no rule.
+ * `line` (default): a row of tabs on one rule, as the interface draws them (Settings, Intelligence): 20 px apart,
+ * scrolling sideways when narrow. `pill`: the interface's panel tabs (the studio's side panels), small buttons with
+ * the active one on the secondary fill and no rule.
  */
 export type TabVariant = 'line' | 'pill';
 
@@ -26,7 +27,7 @@ export function TabList({
       aria-label={label}
       className={cn(
         'flex shrink-0',
-        variant === 'line' ? 'gap-1 border-b border-border px-1' : 'gap-0.5 px-2.5 pt-2.5',
+        variant === 'line' ? 'gap-5 overflow-x-auto border-b border-border' : 'gap-0.5 px-2.5 pt-2.5',
         className,
       )}
     >
@@ -35,6 +36,7 @@ export function TabList({
   );
 }
 
+/** `line`: the active tab is ink with a 2 px ink underline on the list's rule; the others are muted text. */
 export function Tab({
   value,
   variant = 'line',
@@ -48,10 +50,10 @@ export function Tab({
     <RadixTabs.Trigger
       value={value}
       className={cn(
-        'text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        'whitespace-nowrap text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
         variant === 'line'
-          ? 'relative -mb-px rounded-t-md border-b-2 border-transparent px-2.5 py-1.5 text-sm data-[state=active]:border-accent data-[state=active]:font-medium data-[state=active]:text-foreground'
-          : 'whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=active]:bg-secondary data-[state=active]:text-foreground',
+          ? 'relative -mb-px rounded-t-md border-b-2 border-transparent py-2.5 text-sm data-[state=active]:border-foreground data-[state=active]:font-medium data-[state=active]:text-foreground'
+          : 'rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=active]:bg-secondary data-[state=active]:text-foreground',
       )}
     >
       {children}

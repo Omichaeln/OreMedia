@@ -170,7 +170,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
     },
     {
       name: 'intelligence',
-      path: () => brandPath('intelligence'),
+      path: () => brandPath('intelligence?view=changed'),
       ready: (page) => testId(page, 'anomaly'),
     },
     {
