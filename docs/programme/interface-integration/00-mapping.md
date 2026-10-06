@@ -70,7 +70,7 @@ structure or missing a control the interface has; **Missing** = no functionality
 | Portfolio figures (overdue, failed/unknown, going out in 7 days)        | `brand.summary` per company                                                           | Ready   | `KpiStrip`, summed over companies; partial loads marked                                                            | Foundation |
 | Company sections with role; brand rows with counts and a flag           | `brand.list` + `brand.summary` per tenant; brand status                               | Partial | Rows rebuilt; the flag shows setup/archived state (channel expiry per brand would be one read per brand; not done) | Foundation |
 | Restricted company state                                                | Suspended membership → FORBIDDEN on that tenant's reads                               | Ready   | The company section shows the server's refusal                                                                     | Foundation |
-| "Performance across all brands →"                                       | `/portfolio/performance` (UX-11)                                                      | Done    | Header and period control; ruled brand table with the company under each brand (claude/ui-performance)             | Screens    |
+| "Performance across all brands →"                                       | `/portfolio/performance` (UX-11)                                                      | Done    | Header and period control; ruled brand table with the company under each brand (#112)                              | Screens    |
 
 ### Home
 

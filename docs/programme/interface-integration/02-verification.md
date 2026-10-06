@@ -63,7 +63,7 @@ Visual comparison (interface `brand-system-*.png` against the application's `sys
 - Wording changed in a test: `brand-kit.e2e.test.ts` opens the voice section from the overview card named "Voice &
   writing" (the interface's label; it was "Voice & personality").
 
-## Performance and portfolio performance (PR: claude/ui-performance)
+## Performance and portfolio performance (PR #112: claude/ui-performance)
 
 | Check                                                                                           | Result                                                                                         |
 | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
