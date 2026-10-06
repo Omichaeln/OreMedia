@@ -40,16 +40,13 @@ export function CompanyPerformance({
   const brands = useBrandsOf(tenantId);
   const headingId = `performance-${tenantId}`;
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-2" data-testid="company-performance">
-      <div className="flex items-baseline justify-between gap-2 border-b border-border pb-2">
-        <h2 id={headingId} className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+    <section aria-labelledby={headingId} className="flex min-w-0 flex-col" data-testid="company-performance">
+      <div className="mb-2 flex items-baseline justify-between gap-2">
+        <h2 id={headingId} className="om-label">
           {name}
         </h2>
-        <Link
-          to={`/c/${encodeURIComponent(tenantId)}`}
-          className="text-sm font-medium underline-offset-2 hover:underline"
-        >
-          Open company
+        <Link to={`/c/${encodeURIComponent(tenantId)}`} className="text-xs font-medium hover:opacity-60">
+          Open company <span aria-hidden="true">→</span>
         </Link>
       </div>
       {brands.isPending && <Skeleton label={`Loading brands of ${name}`} lines={2} />}
@@ -67,27 +64,28 @@ export function CompanyPerformance({
         <div className="overflow-x-auto">
           <table className="w-full min-w-[40rem] border-collapse text-sm">
             <thead>
-              <tr className="text-left text-xs text-muted-foreground">
-                <th scope="col" className="py-2 pr-3 font-medium">
+              <tr className="border-t border-border text-left text-xs text-muted-foreground">
+                <th scope="col" className="py-2 pr-3 font-normal">
                   Brand
                 </th>
-                <th scope="col" className="py-2 pr-3 text-right font-medium">
+                <th scope="col" className="py-2 pr-3 text-right font-normal">
                   Posts
                 </th>
                 {COLUMNS.map(([group, label]) => (
-                  <th key={group} scope="col" className="py-2 pr-3 text-right font-medium">
+                  <th key={group} scope="col" className="py-2 pr-3 text-right font-normal">
                     {label}
                   </th>
                 ))}
               </tr>
             </thead>
-            <tbody className="divide-y divide-border">
+            <tbody>
               {brands.data.map((b) => (
                 <BrandRow
                   key={b.id}
                   tenantId={tenantId}
                   brandId={b.id}
                   name={b.name}
+                  company={name}
                   windowStart={windowStart}
                   windowEnd={windowEnd}
                   ageDays={ageDays}
@@ -105,6 +103,7 @@ function BrandRow({
   tenantId,
   brandId,
   name,
+  company,
   windowStart,
   windowEnd,
   ageDays,
@@ -112,6 +111,7 @@ function BrandRow({
   tenantId: string;
   brandId: string;
   name: string;
+  company: string;
   windowStart: string;
   windowEnd: string;
   ageDays: MetricAgeDays;
@@ -120,11 +120,16 @@ function BrandRow({
   const href = `/c/${encodeURIComponent(tenantId)}/b/${encodeURIComponent(brandId)}/performance`;
   const data = performance.data;
   return (
-    <tr className="align-top" data-testid="brand-performance" data-brand={brandId}>
-      <th scope="row" className="py-2 pr-3 text-left font-medium">
+    <tr
+      className="border-t border-border align-top hover:bg-muted"
+      data-testid="brand-performance"
+      data-brand={brandId}
+    >
+      <th scope="row" className="py-3 pr-3 text-left font-medium">
         <Link to={href} className="underline-offset-2 hover:underline">
           {name}
         </Link>
+        <span className="block text-xs font-normal text-muted-foreground">{company}</span>
         {data && !data.sample.sufficient && (
           <span className="mt-1 block">
             <Badge tone="neutral">Insufficient sample</Badge>
@@ -133,32 +138,32 @@ function BrandRow({
         {data && <ListedOnly data={data} />}
       </th>
       {performance.isPending && (
-        <td colSpan={COLUMNS.length + 1} className="py-2 text-muted-foreground">
+        <td colSpan={COLUMNS.length + 1} className="py-3 text-xs text-muted-foreground">
           Loading…
         </td>
       )}
       {performance.isError && (
-        <td colSpan={COLUMNS.length + 1} className="py-2 text-muted-foreground">
+        <td colSpan={COLUMNS.length + 1} className="py-3 text-xs text-muted-foreground">
           Unavailable right now.
         </td>
       )}
       {data && (
         <>
-          <td className="py-2 pr-3 text-right tabular-nums">
+          <td className="py-3 pr-3 text-right text-xs tabular-nums">
             {data.sample.current}
-            <span className="block text-xs text-muted-foreground">prev {data.sample.previous}</span>
+            <span className="block text-2xs text-muted-foreground">prev {data.sample.previous}</span>
           </td>
           {COLUMNS.map(([group]) => {
             const c = data.comparison.find((x) => x.comparableGroup === group);
             const a = data.current.aggregates.find((x) => x.comparableGroup === group);
             return (
-              <td key={group} className="py-2 pr-3 text-right tabular-nums" data-group={group}>
+              <td key={group} className="py-3 pr-3 text-right text-xs tabular-nums" data-group={group}>
                 {c && c.current !== null ? (
                   formatValue(c.kind, c.current)
                 ) : (
                   <Badge tone="neutral">Unavailable</Badge>
                 )}
-                <span className="block text-xs text-muted-foreground">
+                <span className="block text-2xs text-muted-foreground">
                   {a ? `${a.subjectsWithData}/${data.sample.current} posts` : 'not returned'}
                   {' · '}
                   {c && c.change !== null
