@@ -86,18 +86,18 @@ structure or missing a control the interface has; **Missing** = no functionality
 
 ### Review and the external portal
 
-| Interface element                                          | Application functionality                       | Status | Required change                                    | PR      |
-| ---------------------------------------------------------- | ----------------------------------------------- | ------ | -------------------------------------------------- | ------- |
-| Filter chips All / Needs attention / Awaiting / Approved   | `useReviewInboxPages` attention filters         | Ready  | `Chip` form                                        | Screens |
-| Request list (title, due, state, secondary flags)          | inbox items                                     | Ready  | Row form                                           | Screens |
-| Request header: id · revision · created; state pill        | `review.requests.get`                           | Ready  | Header form                                        | Screens |
-| Change note banner                                         | request note / changes requested                | Ready  | Banner form                                        | Screens |
-| Frozen manifest rows (channel, caption, ALT, hashes, size) | frozen manifest, `review.requests.media`        | Ready  | Row form with hatching placeholders when no export | Screens |
-| Reviewers (name, team, decision)                           | decisions                                       | Ready  | Table form                                         | Screens |
-| External links (+ New link, Preview, Revoke)               | external reviewer links                         | Ready  | Form                                               | Screens |
-| Comments with OUTDATED tag                                 | request comments bound to the manifest revision | Ready  | Form                                               | Screens |
-| Your decision: note, Approve revision N, Request changes   | `review.decide` (SoD D-11)                      | Ready  | Card form                                          | Screens |
-| Portal: same read-only manifest, decision, comment         | `/review-portal/*` token scope                  | Ready  | Interface's portal form                            | Screens |
+| Interface element                                          | Application functionality                       | Status | Required change                                    | PR        |
+| ---------------------------------------------------------- | ----------------------------------------------- | ------ | -------------------------------------------------- | --------- |
+| Filter chips All / Needs attention / Awaiting / Approved   | `useReviewInboxPages` attention filters         | Built  | `Chip` form                                        | ui-review |
+| Request list (title, due, state, secondary flags)          | inbox items                                     | Built  | Row form                                           | ui-review |
+| Request header: id · revision · created; state pill        | `review.requests.get`                           | Built  | Header form                                        | ui-review |
+| Change note banner                                         | request note / changes requested                | Built  | Banner form                                        | ui-review |
+| Frozen manifest rows (channel, caption, ALT, hashes, size) | frozen manifest, `review.requests.media`        | Built  | Row form with hatching placeholders when no export | ui-review |
+| Reviewers (name, team, decision)                           | decisions                                       | Built  | Table form                                         | ui-review |
+| External links (+ New link, Preview, Revoke)               | external reviewer links                         | Built  | Form                                               | ui-review |
+| Comments with OUTDATED tag                                 | request comments bound to the manifest revision | Built  | Form                                               | ui-review |
+| Your decision: note, Approve revision N, Request changes   | `review.decide` (SoD D-11)                      | Built  | Card form                                          | ui-review |
+| Portal: same read-only manifest, decision, comment         | `/review-portal/*` token scope                  | Built  | Interface's portal form                            | ui-review |
 
 ### Calendar
 
