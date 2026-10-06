@@ -4,35 +4,56 @@ import { cn } from '@oremedia/ui';
 
 export const Tabs = RadixTabs.Root;
 
-/** A row of tabs on one rule, as the interface draws them (Settings, Intelligence): 20 px apart, scrolling sideways when narrow. */
+/**
+ * `line` (default): a row of tabs on one rule, as the interface draws them (Settings, Intelligence): 20 px apart,
+ * scrolling sideways when narrow. `pill`: the interface's panel tabs (the studio's side panels), small buttons with
+ * the active one on the secondary fill and no rule.
+ */
+export type TabVariant = 'line' | 'pill';
+
 export function TabList({
   label,
   className,
+  variant = 'line',
   children,
 }: {
   label: string;
   className?: string;
+  variant?: TabVariant;
   children: React.ReactNode;
 }) {
   return (
     <RadixTabs.List
       aria-label={label}
-      className={cn('flex shrink-0 gap-5 overflow-x-auto border-b border-border', className)}
+      className={cn(
+        'flex shrink-0',
+        variant === 'line' ? 'gap-5 overflow-x-auto border-b border-border' : 'gap-0.5 px-2.5 pt-2.5',
+        className,
+      )}
     >
       {children}
     </RadixTabs.List>
   );
 }
 
-/** The active tab is ink with a 2 px ink underline on the list's rule; the others are muted text. */
-export function Tab({ value, children }: { value: string; children: React.ReactNode }) {
+/** `line`: the active tab is ink with a 2 px ink underline on the list's rule; the others are muted text. */
+export function Tab({
+  value,
+  variant = 'line',
+  children,
+}: {
+  value: string;
+  variant?: TabVariant;
+  children: React.ReactNode;
+}) {
   return (
     <RadixTabs.Trigger
       value={value}
       className={cn(
-        'relative -mb-px whitespace-nowrap rounded-t-md border-b-2 border-transparent py-2.5 text-sm text-muted-foreground',
-        'hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-        'data-[state=active]:border-foreground data-[state=active]:font-medium data-[state=active]:text-foreground',
+        'whitespace-nowrap text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        variant === 'line'
+          ? 'relative -mb-px rounded-t-md border-b-2 border-transparent py-2.5 text-sm data-[state=active]:border-foreground data-[state=active]:font-medium data-[state=active]:text-foreground'
+          : 'rounded-md px-2.5 py-1.5 text-xs font-medium data-[state=active]:bg-secondary data-[state=active]:text-foreground',
       )}
     >
       {children}

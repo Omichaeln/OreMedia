@@ -1,4 +1,5 @@
-import type { ContentType } from '@oremedia/contracts/creative';
+import type { ContentType, FormatDefinition } from '@oremedia/contracts/creative';
+import { VIDEO_FORMAT_KEYS, VIDEO_FORMATS } from '@oremedia/contracts/video';
 import { FORMAT_DEFINITIONS, aspectLabel } from '@oremedia/editor';
 
 /**
@@ -102,4 +103,49 @@ export const formatLabel = (key: string): string => FORMAT_DEFINITIONS[key]?.lab
 export function suggestTitle(type: ContentType, from: string | null, now = new Date()): string {
   const date = now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
   return [contentTypeOf(type).titleLabel, from, date].filter(Boolean).join(' – ').slice(0, 200);
+}
+
+/**
+ * The interface's two kinds of document: Still (pages on the canvas) and Motion (a timeline). Each lists the formats
+ * the application can create and export for it: the page formats, and the video output presets.
+ */
+export type StudioKind = 'still' | 'motion';
+
+export const KIND_FORMATS: Readonly<Record<StudioKind, readonly FormatDefinition[]>> = {
+  still: Object.values(FORMAT_DEFINITIONS),
+  motion: VIDEO_FORMAT_KEYS.map((k) => VIDEO_FORMATS[k]),
+};
+
+export const KINDS: ReadonlyArray<{ key: StudioKind; label: string; description: string; tools: string }> = [
+  {
+    key: 'still',
+    label: 'Still',
+    description:
+      'Posts, carousels, stories, covers and banners. A layered canvas with brand templates and AI generation.',
+    tools: 'Layers · drag-in assets · brand templates · rendered exports',
+  },
+  {
+    key: 'motion',
+    label: 'Motion',
+    description: 'Reels, shorts and video ads. A multi-track timeline with an AI storyboard and AI edits.',
+    tools: 'Multi-track timeline · captions and titles · AI storyboard from your assets',
+  },
+];
+
+/** The platform list of the format step: each channel with the formats of a kind that it takes, in channel order. */
+export const platformsOf = (kind: StudioKind) =>
+  CHANNELS.map((c) => ({
+    ...c,
+    formats: KIND_FORMATS[kind].filter((f) => f.providerKeys.includes(c.key)),
+  })).filter((p) => p.formats.length > 0);
+
+/**
+ * The content types a page format can be started as: those that offer it, then any a starter or template at that
+ * format declares (a custom size is custom artwork). In the content-type order; never the video type.
+ */
+export function contentTypesFor(formatKey: string, declared: readonly ContentType[] = []): ContentType[] {
+  const offered = CONTENT_TYPES.filter(
+    (c) => c.key !== 'video' && (c.formats.includes(formatKey) || declared.includes(c.key)),
+  ).map((c) => c.key);
+  return offered.length > 0 ? offered : ['custom'];
 }

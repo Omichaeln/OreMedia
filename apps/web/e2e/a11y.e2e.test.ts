@@ -149,10 +149,18 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
         page.locator('[data-testid="run-detail"][data-run-state="completed"]').waitFor({ timeout: 15_000 }),
     },
     {
-      // The Studio section: the documents index with the create form; the editor itself is listed separately.
+      // The Studio section: the create screen (Still / Motion and the documents to continue); the editor itself is
+      // listed separately.
       name: 'studio documents',
       path: () => brandPath('studio'),
-      ready: (page) => page.getByRole('button', { name: 'Blank canvas…' }).waitFor({ timeout: 15_000 }),
+      ready: (page) => page.getByTestId('studio-kind').first().waitFor({ timeout: 15_000 }),
+    },
+    {
+      // The format step with a size chosen: platforms, sizes, the custom size and the layouts beside them.
+      name: 'studio format',
+      path: () => brandPath('studio?kind=still&platform=instagram_business&format=square_1080'),
+      ready: (page) =>
+        page.getByTestId('template-gallery').getByTestId('gallery-card').nth(1).waitFor({ timeout: 15_000 }),
     },
     {
       // R2-5: the sources strip, the social and web figures, the audit, the splits and the limits.

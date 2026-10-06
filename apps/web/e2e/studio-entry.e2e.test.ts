@@ -7,9 +7,10 @@ import { createMockHandler, E2E, MockBackend } from './mock-api';
 import { startStaticServer } from './static-server';
 
 /**
- * STU-1a against the BUILT app and the in-process mock transport: the template-led creation screen (filters, previews,
- * every way to start), the title, and the editor (insert, multi-select, align, group, rotate, crop, mask, pages,
- * locks, save as template and approval), with keyboard paths and three widths. Opt-in (`OREMEDIA_E2E=1`).
+ * STU-1a against the BUILT app and the in-process mock transport: the interface's create screen and format step
+ * (Still / Motion with their format counts, platforms, sizes, layouts with previews and content types, every way to
+ * start), the title, and the editor (insert, multi-select, align, group, rotate, crop, mask, pages, locks, save as
+ * template and approval), with keyboard paths and three widths. Opt-in (`OREMEDIA_E2E=1`).
  */
 const enabled = process.env['OREMEDIA_E2E'] === '1';
 const dist = fileURLToPath(new URL('../dist', import.meta.url));
@@ -37,11 +38,22 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
   const waitSaved = () => expect.poll(saveKind, { timeout: 15_000 }).toBe('saved');
   const layer = (name: RegExp) => page.getByTestId('layers').getByRole('option', { name });
   const gallery = () => page.getByTestId('template-gallery');
+  const kinds = () => page.getByTestId('studio-kind');
   const openStudioIndex = async () => {
     await page.goto(`${origin}${brandPath}/studio`);
+    await kinds().first().waitFor({ timeout: 15_000 });
+  };
+  /** The format step with a size chosen: blank and the layouts for it load beside the sizes. */
+  const openFormat = async (format = 'square_1080', platform = 'instagram_business') => {
+    await page.goto(`${origin}${brandPath}/studio?kind=still&platform=${platform}&format=${format}`);
     await gallery().getByTestId('gallery-card').first().waitFor({ timeout: 15_000 });
   };
-  const cardNames = () => gallery().getByTestId('gallery-card').locator('h3').allTextContents();
+  const cardNames = () => gallery().getByTestId('layout-name').allTextContents();
+  const layout = (name: RegExp) => gallery().getByRole('button', { name });
+  const openInCanvas = async () => {
+    await page.getByRole('button', { name: 'Open in canvas' }).click();
+    await page.waitForURL('**/studio/*', { timeout: 15_000 });
+  };
   const noHorizontalScroll = () =>
     page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1);
   const setNumber = async (selector: string, value: string) => {
@@ -69,53 +81,54 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     await close();
   });
 
-  it('the gallery previews built-in starters and brand templates and filters by type, channel, format and source', async () => {
+  it('the create screen offers Still and Motion with their format counts; the format step lists platforms, sizes and the layouts for a size', async () => {
     await openStudioIndex();
-    expect(await page.getByTestId('scene-preview').count()).toBeGreaterThanOrEqual(12);
-    // Previews are drawn by the scene renderer (a Konva canvas inside each preview).
-    expect(await page.getByTestId('scene-preview').first().locator('canvas').count()).toBeGreaterThan(0);
-    const all = await cardNames();
-    expect(all).toEqual(expect.arrayContaining(['Bold headline', 'Promo template', 'Three-step guide']));
-    const video = page
-      .getByRole('group', { name: 'Content type' })
-      .getByRole('button', { name: /Video or reel/ });
-    // STU-2b: videos can be started; the tile opens the video start (video-studio.e2e.test.ts creates one).
-    expect(await video.isDisabled()).toBe(false);
-    expect(await video.textContent()).toContain('A reel, short or video ad on a timeline.');
-
-    await page
-      .getByRole('group', { name: 'Content type' })
-      .getByRole('button', { name: /^Carousel/ })
-      .click();
-    await expect.poll(cardNames).toEqual(['Three-step guide', 'Five-slide tips']);
-    await page
-      .getByRole('group', { name: 'Content type' })
-      .getByRole('button', { name: /^Everything/ })
-      .click();
-
-    await page.getByLabel('Channel').click();
-    await page.getByRole('option', { name: 'YouTube' }).click();
-    await expect.poll(cardNames).toEqual(['Video thumbnail']);
-    await page.getByLabel('Channel').click();
-    await page.getByRole('option', { name: 'All channels' }).click();
-
-    await page.getByLabel('Format').click();
-    await page.getByRole('option', { name: 'Instagram story 9:16' }).click();
-    await expect.poll(cardNames).toEqual(['Story announcement', 'Story with photo']);
-    await page.getByLabel('Format').click();
-    await page.getByRole('option', { name: 'All formats' }).click();
-
-    await page.locator('#gallery-source').click();
-    await page.getByRole('option', { name: 'Brand templates', exact: true }).click();
-    await expect.poll(cardNames).toEqual(['Promo template']);
-    await page.locator('#gallery-source').click();
-    await page.getByRole('option', { name: 'Built-in and brand templates' }).click();
+    expect(await page.getByRole('heading', { level: 1 }).textContent()).toBe('What are you making?');
+    expect(await kinds().filter({ hasText: 'Still' }).textContent()).toContain('10 formats');
+    expect(await kinds().filter({ hasText: 'Motion' }).textContent()).toContain('4 formats');
+    await kinds().filter({ hasText: 'Still' }).click();
+    await expect.poll(() => page.url()).toContain('kind=still');
+    const platforms = page.getByRole('navigation', { name: 'Formats' });
+    const linkedIn = platforms.getByRole('button', { name: /^LinkedIn/ });
+    expect(await linkedIn.textContent()).toContain('4');
+    await linkedIn.click();
+    await expect
+      .poll(() => page.getByRole('list', { name: 'Sizes' }).getByTestId('format-card').count())
+      .toBe(4);
+    await platforms.getByRole('button', { name: /^Instagram/ }).click();
+    await page.getByRole('button', { name: /^Square 1080/ }).click();
+    await expect.poll(() => new URL(page.url()).searchParams.get('format')).toBe('square_1080');
+    // Layouts are previewed by the scene renderer (a Konva canvas inside each preview): blank, the brand's approved
+    // template and the built-in starters made for the size.
+    await expect
+      .poll(cardNames, { timeout: 15_000 })
+      .toEqual(expect.arrayContaining(['Blank', 'Promo template', 'Bold headline', 'Three-step guide']));
+    expect(await gallery().getByTestId('scene-preview').count()).toBeGreaterThanOrEqual(5);
+    expect(await gallery().getByTestId('scene-preview').first().locator('canvas').count()).toBeGreaterThan(0);
+    // A size that is more than one content type is filtered by it; a blank start takes the chosen type.
+    const types = page.getByRole('group', { name: 'Content type' });
+    await types.getByRole('button', { name: 'Carousel' }).click();
+    await expect.poll(cardNames).toEqual(['Blank', 'Three-step guide']);
+    expect(await layout(/^Blank/).textContent()).toContain('Carousel');
+    await types.getByRole('button', { name: 'All' }).click();
+    // The step is in the address: a reload keeps the platform and the size.
+    await page.reload();
+    await expect.poll(cardNames, { timeout: 15_000 }).toContain('Promo template');
+    // A story size lists the story layouts only.
+    await page.getByRole('button', { name: /^Instagram story 9:16/ }).click();
+    await expect
+      .poll(cardNames, { timeout: 15_000 })
+      .toEqual(['Blank', 'Story announcement', 'Story with photo']);
+    expect(await page.getByRole('group', { name: 'Content type' }).count()).toBe(0);
   }, 60_000);
 
-  it('one click on a starter opens the studio on a created document with a suggested title and its content type', async () => {
-    await openStudioIndex();
-    await gallery().getByRole('button', { name: 'Use Bold headline' }).click();
-    await page.waitForURL('**/studio/*', { timeout: 15_000 });
+  it('choosing a layout suggests a title with its content type; Open in canvas creates the document and opens the studio', async () => {
+    await openFormat();
+    await layout(/^Bold headline/).click();
+    expect(await page.getByLabel('New document title').inputValue()).toMatch(
+      /^Promotional graphic – Bold headline – \d{1,2} \w{3}$/,
+    );
+    await openInCanvas();
     await expect
       .poll(() => page.getByTestId('document-title').textContent(), { timeout: 15_000 })
       .toMatch(/^Promotional graphic – Bold headline – \d{1,2} \w{3}$/);
@@ -123,6 +136,10 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     expect(create?.source).toEqual({ kind: 'starter', starterKey: 'post-bold-headline' });
     expect(head().contentType).toBe('social_post');
     expect(byName('Headline')).toMatchObject({ type: 'text', semanticRole: 'headline' });
+    // The editor's breadcrumb names the kind and the document.
+    expect(await page.getByRole('navigation', { name: 'Breadcrumb' }).textContent()).toContain(
+      'Studio/Still/',
+    );
   }, 30_000);
 
   it('the title is renamed inline in the header', async () => {
@@ -279,19 +296,15 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     await row.getByRole('button', { name: 'Versions' }).click();
     await page.getByRole('button', { name: 'Approve version 1' }).click();
     await expect.poll(() => saved?.versions[0]?.state).toBe('approved');
-    await openStudioIndex();
-    await expect.poll(cardNames).toContain('Spring promo');
+    await openFormat();
+    await expect.poll(cardNames, { timeout: 15_000 }).toContain('Spring promo');
   }, 45_000);
 
-  it('starts from an approved brand template with an edited title, from a blank canvas, a custom size and a copy', async () => {
-    await gallery()
-      .getByTestId('gallery-card')
-      .filter({ hasText: 'Promo template' })
-      .getByRole('button', { name: 'Details' })
-      .click();
+  it('starts from an approved brand template with an edited title, blank at a story size, a custom size and a copy', async () => {
+    await openFormat();
+    await layout(/^Promo template/).click();
     await page.getByLabel('New document title').fill('From the brand template');
-    await page.getByRole('button', { name: 'Create and open' }).click();
-    await page.waitForURL('**/studio/*', { timeout: 15_000 });
+    await openInCanvas();
     expect(backend.creates.at(-1)?.source).toEqual({
       kind: 'template',
       templateId: 'tpl_e2e',
@@ -299,34 +312,39 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     });
     expect(head().templateVersionId).toBe('tv_e2e');
 
-    await openStudioIndex();
-    await page.getByRole('button', { name: 'Blank canvas…' }).click();
-    await page.locator('#blank-type').click();
-    await page.getByRole('option', { name: 'Story' }).click();
-    await expect.poll(() => page.locator('#blank-format').textContent()).toContain('Instagram story 9:16');
-    await page.getByRole('button', { name: 'Create and open' }).click();
-    await page.waitForURL('**/studio/*', { timeout: 15_000 });
+    // Blank at a story size: the size decides the content type.
+    await openFormat('ig_story_9x16');
+    await layout(/^Blank/).click();
+    await openInCanvas();
     expect(headPage()).toMatchObject({ formatKey: 'ig_story_9x16', width: 1080, height: 1920 });
     expect(head().contentType).toBe('story');
+    expect(backend.creates.at(-1)?.source).toEqual({ kind: 'blank' });
 
-    await openStudioIndex();
-    await page.getByRole('button', { name: 'Custom size…' }).click();
+    // A custom size is checked against the render limits before it is used.
+    await page.goto(`${origin}${brandPath}/studio?kind=still`);
     await page.getByLabel('Width (px)').fill('5000');
     await expect
       .poll(() => page.getByRole('status').filter({ hasText: 'px' }).first().textContent())
       .toContain('at most 4096');
-    expect(await page.getByRole('button', { name: 'Create and open' }).isDisabled()).toBe(true);
+    expect(await page.getByRole('button', { name: 'Use size' }).getAttribute('aria-disabled')).toBe('true');
     await page.getByLabel('Width (px)').fill('1500');
     await page.getByLabel('Height (px)').fill('500');
+    await page.getByRole('button', { name: 'Use size' }).click();
+    await expect.poll(cardNames, { timeout: 15_000 }).toEqual(['Blank']);
     await page.getByLabel('New document title').fill('Event banner');
-    await page.getByRole('button', { name: 'Create and open' }).click();
-    await page.waitForURL('**/studio/*', { timeout: 15_000 });
+    await openInCanvas();
     expect(headPage()).toMatchObject({ formatKey: 'custom_1500x500', width: 1500, height: 500 });
+    expect(backend.creates.at(-1)?.source).toEqual({ kind: 'custom' });
 
+    // A copy, from the document's menu in the Continue list.
     await openStudioIndex();
-    await page.getByRole('button', { name: 'Duplicate a document…' }).click();
-    await page.getByLabel('Document to copy').click();
-    await page.getByRole('option', { name: 'Spring offer' }).click();
+    const row = page
+      .getByTestId('documents')
+      .getByRole('listitem')
+      .filter({ has: page.getByRole('link', { name: /^Spring offer/ }) });
+    await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(1);
+    await row.getByRole('button', { name: 'Actions for Spring offer' }).click();
+    await page.getByRole('menuitem', { name: 'Duplicate…' }).click();
     await expect.poll(() => page.getByLabel('New document title').inputValue()).toBe('Spring offer (copy)');
     await page.getByRole('button', { name: 'Create and open' }).click();
     await page.waitForURL('**/studio/*', { timeout: 15_000 });
@@ -361,15 +379,26 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     expect(backend.doc(doc.id).version).toBe(3);
   }, 45_000);
 
-  it('keyboard: content type tiles and starts work without a pointer; marquee and arrow keys work on the canvas', async () => {
+  it('keyboard: the kind, size, content type, layout and Open work without a pointer; marquee and arrow keys work on the canvas', async () => {
     await openStudioIndex();
+    await kinds().filter({ hasText: 'Still' }).focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => page.url()).toContain('kind=still');
+    const square = page.getByRole('button', { name: /^Square 1080/ });
+    await square.focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => square.getAttribute('aria-pressed')).toBe('true');
     const carousel = page
       .getByRole('group', { name: 'Content type' })
-      .getByRole('button', { name: /^Carousel/ });
+      .getByRole('button', { name: 'Carousel' });
     await carousel.focus();
     await page.keyboard.press('Enter');
     await expect.poll(() => carousel.getAttribute('aria-pressed')).toBe('true');
-    await gallery().getByRole('button', { name: 'Use Three-step guide' }).focus();
+    const guide = layout(/^Three-step guide/);
+    await guide.focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => guide.getAttribute('aria-pressed')).toBe('true');
+    await page.getByRole('button', { name: 'Open in canvas' }).focus();
     await page.keyboard.press('Enter');
     await page.waitForURL('**/studio/*', { timeout: 15_000 });
     expect(head().pages).toHaveLength(3);
@@ -392,11 +421,14 @@ describe.skipIf(!enabled)('studio entry and editor completeness (STU-1a, built a
     [768, 1024],
     [390, 844],
   ] as const)
-    it(`responsive at ${width}px: the creation screen and the editor fit without horizontal scrolling`, async () => {
+    it(`responsive at ${width}px: the create screen, the format step and the editor fit without horizontal scrolling`, async () => {
       await page.setViewportSize({ width, height });
       await openStudioIndex();
       expect(await noHorizontalScroll()).toBe(true);
-      await gallery().getByRole('button', { name: 'Use Bold headline' }).click();
+      await openFormat();
+      expect(await noHorizontalScroll()).toBe(true);
+      // Double-clicking a layout opens it with the suggested title, as the interface's layouts do.
+      await layout(/^Bold headline/).dblclick();
       await page.waitForURL('**/studio/*', { timeout: 15_000 });
       await page.getByTestId('insert-toolbar').waitFor();
       expect(await noHorizontalScroll()).toBe(true);

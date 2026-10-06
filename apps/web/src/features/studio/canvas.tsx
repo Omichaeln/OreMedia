@@ -229,8 +229,9 @@ export function Canvas(props: CanvasProps) {
       onKeyDown={onKeyDown}
       data-testid="canvas"
       className={cn(
-        'relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-border bg-muted',
-        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        // The interface's tinted ground around the artboard; the focus ring sits inside the column's edges.
+        'relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden bg-secondary',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
       )}
     >
       <p id="canvas-help" className="sr-only">
