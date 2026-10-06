@@ -29,12 +29,20 @@ export function PageHeader({ title, eyebrow, description, actions, id, className
 }
 
 export interface KpiStripProps {
-  items: Array<{ label: string; value: React.ReactNode; tone?: 'default' | 'critical' | 'good' }>;
+  items: Array<{
+    label: string;
+    value: React.ReactNode;
+    tone?: 'default' | 'critical' | 'good';
+    /** A test id on the figure, where a suite reads it. */
+    testId?: string;
+  }>;
+  /** `lg`: 22 px bold figures (the portfolio's counts); `md`: 15 px figures (a run's tool calls, tokens and cost). */
+  size?: 'lg' | 'md';
   className?: string;
 }
 
-/** A row of large figures between two rules (the portfolio's counts, a screen's totals). */
-export function KpiStrip({ items, className }: KpiStripProps) {
+/** A row of figures between two rules (the portfolio's counts, a screen's totals, a run's figures). */
+export function KpiStrip({ items, size = 'lg', className }: KpiStripProps) {
   return (
     <dl
       className={cn(
@@ -44,14 +52,16 @@ export function KpiStrip({ items, className }: KpiStripProps) {
       )}
     >
       {items.map((item) => (
-        <div key={item.label} className="flex flex-col gap-1 py-4">
+        <div key={item.label} className={cn('flex flex-col gap-1', size === 'lg' ? 'py-4' : 'py-3.5')}>
           <dt className="text-xs text-muted-foreground">{item.label}</dt>
           <dd
             className={cn(
-              'text-xl font-bold tabular-nums',
+              'tabular-nums',
+              size === 'lg' ? 'text-xl font-bold' : 'text-md',
               item.tone === 'critical' && 'text-status-critical',
               item.tone === 'good' && 'text-status-good',
             )}
+            data-testid={item.testId}
           >
             {item.value}
           </dd>

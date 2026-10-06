@@ -167,12 +167,12 @@ structure or missing a control the interface has; **Missing** = no functionality
 
 ### Agents
 
-| Interface element                                                  | Application functionality     | Status | Required change | PR      |
-| ------------------------------------------------------------------ | ----------------------------- | ------ | --------------- | ------- |
-| Runs list (goal, state, when); New run                             | `runs-list`, `start-run-form` | Ready  | Forms           | Screens |
-| Run header (id · agent · skill · mode), Tool calls / Tokens / Cost | `run-detail`, ledger          | Ready  | Form            | Screens |
-| Constraint note; step rows with timings; redaction note            | steps                         | Ready  | Form            | Screens |
-| Review proposal / Cancel run                                       | proposal flow, cancel         | Ready  | Buttons         | Screens |
+| Interface element                                                  | Application functionality     | Status | Required change                                                                                                                                                                                                                                                                             | PR                 |
+| ------------------------------------------------------------------ | ----------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ |
+| Runs list (goal, state, when); New run                             | `runs-list`, `start-run-form` | Done   | Rows are the brief's goal (or the task kind) with a dot, the state and a relative time; "New run" is the ink button; the newest run opens when none is in the URL                                                                                                                           | `claude/ui-agents` |
+| Run header (id · agent · skill · mode), Tool calls / Tokens / Cost | `run-detail`, ledger          | Done   | Eyebrow is id · service principal id · task kind · mode (the run DTO carries ids, not names); tool calls and tokens are summed from the recorded steps; no budget ceiling is shown because the run DTO does not carry it                                                                    | `claude/ui-agents` |
+| Constraint note; step rows with timings; redaction note            | steps                         | Done   | Needs-attention items are the tinted notes; each step is a dot, its summary, "tool → result" lines (policy and outcome named only when not allowed/ok, the redacted input under a disclosure) and its duration; initiator, times, model and correlation sit under a "Run record" disclosure | `claude/ui-agents` |
+| Review proposal / Cancel run                                       | proposal flow, cancel         | Done   | "Review proposal" (ink) opens the accept / modify / reject sheet; "Cancel run" is the secondary button with its confirmation; the prototype's Retry / Run again / Open result / Create a mandate have no procedure behind them and are not shown                                            | `claude/ui-agents` |
 
 ### Brand system
 

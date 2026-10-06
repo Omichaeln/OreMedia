@@ -51,10 +51,11 @@ export interface AuditOptions {
   narrow: boolean;
 }
 
-/** Runs every static rule in the page and returns the violations (empty = clean). */
-export async function auditPage(page: Page, opts: AuditOptions): Promise<A11yViolation[]> {
-  // The audit reads the resting state: entrance animations finish first (under reduced motion they are 0.01 ms),
-  // then computed styles settle a frame after the change.
+/**
+ * The resting state: entrance animations finish first (under reduced motion they are 0.01 ms), then computed styles
+ * settle a frame after the change. Both audits read the page only after this.
+ */
+async function settle(page: Page): Promise<void> {
   await page.evaluate(async () => {
     // Entrance animations are jumped to their end state (an infinite one, e.g. a pulse, is left running); rows that
     // arrive after the first pass (a list that loads after its screen) are caught by the next, bounded.
@@ -75,6 +76,11 @@ export async function auditPage(page: Page, opts: AuditOptions): Promise<A11yVio
     }
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   });
+}
+
+/** Runs every static rule in the page and returns the violations (empty = clean). */
+export async function auditPage(page: Page, opts: AuditOptions): Promise<A11yViolation[]> {
+  await settle(page);
   return page.evaluate(auditDom, opts);
 }
 
@@ -95,6 +101,8 @@ export interface KeyboardPathResult {
  * Roving-tabindex widgets (tabs, listboxes, radio groups, the calendar grid) are one stop: reaching any member counts.
  */
 export async function keyboardPath(page: Page): Promise<KeyboardPathResult> {
+  // Baselines and hit tests are read at rest: a screen still fading in would record its mid-animation styles.
+  await settle(page);
   const actions = await page.evaluate(enumerateActions);
   const reached = new Set<string>();
   const invisible = new Map<string, A11yViolation>();
@@ -720,8 +728,13 @@ async function readFocusStop(): Promise<{
     node = parent;
   }
   const s = getComputedStyle(el);
-  const now = `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}|${s.boxShadow}`;
+  const indicatorOf = () => `${s.outlineStyle} ${s.outlineWidth} ${s.outlineColor}|${s.boxShadow}`;
   const baseline = (window as unknown as { __a11yBaseline?: Map<Element, string> }).__a11yBaseline?.get(el);
+  // On a loaded CI runner two frames can pass before the transition to the focus ring has settled; give it up to
+  // ten more frames to differ from the unfocused state. An indicator that never appears still fails below.
+  for (let frame = 0; frame < 10 && baseline !== undefined && indicatorOf() === baseline; frame += 1)
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  const now = indicatorOf();
   // No baseline: the element appeared after enumeration or is a container stop; judge it by having any indicator.
   const hasIndicator =
     (s.outlineStyle !== 'none' && parseFloat(s.outlineWidth) > 0) || s.boxShadow !== 'none';

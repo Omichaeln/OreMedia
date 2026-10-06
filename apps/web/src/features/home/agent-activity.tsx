@@ -3,23 +3,10 @@ import { EmptyState, Skeleton, StatusDot, toneGlyph } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
 import { brandPath, useBrandContext } from '../brand/brand-context';
-import { runStateChip } from '../agents/run-helpers';
+import { relativeTime, runStateChip, runTitle } from '../agents/run-helpers';
 import { useAgentRunList } from '../agents/use-agent-runs';
 
 const RECENT = 4;
-
-/** "12 min ago", "2 h ago", "Yesterday", "3 days ago": the interface's relative times, never a raw timestamp. */
-export function relativeTime(iso: string, now = new Date()): string {
-  const minutes = Math.max(0, Math.round((now.getTime() - new Date(iso).getTime()) / 60_000));
-  if (minutes < 1) return 'Just now';
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.round(hours / 24);
-  if (days === 1) return 'Yesterday';
-  if (days < 7) return `${days} days ago`;
-  return new Date(iso).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
-}
 
 /**
  * The brand's most recent agent runs from the server, newest first: the task, when it started, and its state as a
@@ -65,7 +52,7 @@ export function AgentActivity() {
                   className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-[11px] text-sm hover:text-accent-ink"
                 >
                   <span className="flex min-w-0 flex-col gap-0.5">
-                    <span className="truncate">{run.taskKind.replace(/_/g, ' ')}</span>
+                    <span className="truncate">{runTitle(run)}</span>
                     <span className="text-xs tabular-nums text-muted-foreground">
                       {relativeTime(run.createdAt)}
                     </span>
