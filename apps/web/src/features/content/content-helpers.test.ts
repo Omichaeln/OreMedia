@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   briefChip,
   briefGaps,
+  briefRowState,
   isSuggested,
   missedDate,
   revisionChip,
   sameIdSet,
   variantFindings,
+  variantStatusText,
 } from './content-helpers';
 
 describe('state chips', () => {
@@ -64,5 +66,34 @@ describe('sameIdSet', () => {
     expect(sameIdSet(['doc_a'], ['doc_a', 'doc_b'])).toBe(false);
     expect(sameIdSet([], ['doc_a'])).toBe(false);
     expect(sameIdSet([], [])).toBe(true);
+  });
+});
+
+describe('column rows (interface integration)', () => {
+  const base = {
+    state: 'draft',
+    createdByKind: 'user',
+    recommendationId: null,
+    audience: 'a',
+    message: 'm',
+    channelConnectionIds: ['ch'],
+  };
+  it('a brief row shows its state, then "Suggested plan" and "Incomplete" after it', () => {
+    expect(briefRowState(base)).toEqual({ tone: 'warning', label: 'Awaiting acceptance' });
+    expect(briefRowState({ ...base, createdByKind: 'agent' }).label).toBe(
+      'Awaiting acceptance · Suggested plan',
+    );
+    expect(briefRowState({ ...base, audience: '', createdByKind: 'agent' })).toEqual({
+      tone: 'warning',
+      label: 'Awaiting acceptance · Suggested plan · Incomplete',
+    });
+    expect(briefRowState({ ...base, state: 'in_progress' })).toEqual({ tone: 'info', label: 'In progress' });
+  });
+  it('a variant line says Valid or the first finding', () => {
+    expect(variantStatusText(variantFindings({ ok: true, issues: [] }))).toBe('Valid');
+    expect(variantStatusText(variantFindings({ ok: false, issues: [{ issue: 'alt text missing' }] }))).toBe(
+      'alt text missing',
+    );
+    expect(variantStatusText(variantFindings({ ok: false, issues: [] }))).toBe('Invalid');
   });
 });
