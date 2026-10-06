@@ -62,6 +62,10 @@
       "ignoreGhsas": [
         "GHSA-vfj7-8cjw-p6xm"
       ]
+    },
+    "overrides": {
+      "source-map-js": "^1.2.2",
+      "tinypool": "^2.1.2"
     }
   }
 }
