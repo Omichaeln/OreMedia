@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { RecommendationAction } from '@oremedia/contracts/intelligence';
-import { Badge, Button, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
+import { Badge, Button, Field, Input, Skeleton, StatusBanner, StatusDot, Textarea, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { denialOf, toUiError } from '../../lib/errors';
@@ -25,6 +25,11 @@ export interface RecommendationCardProps {
   position: number | null;
   /** Called once the person decided (accepted or dismissed), so the list can keep the card and its outcome. */
   onDecided?: (recommendation: RecommendationDto) => void;
+  /**
+   * `card` (the intelligence workspace) or `row` (Performance's next content cycle, the interface's ruled row with
+   * Keep and Drop). Both decide through the same accept and dismiss: Keep is the proposed action, Drop is dismiss.
+   */
+  layout?: 'card' | 'row';
 }
 
 /** Spec 16.4: the downstream object gets a back-reference; the screen links to where it lives. */
@@ -57,7 +62,9 @@ export function RecommendationCard({
   recommendation: r,
   position,
   onDecided,
+  layout = 'card',
 }: RecommendationCardProps) {
+  const row = layout === 'row';
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const acceptIntent = useIntentKey();
@@ -153,106 +160,184 @@ export function RecommendationCard({
   return (
     <li
       id={formId}
-      className="flex flex-col gap-2 rounded-md border border-border p-3 target:ring-2 target:ring-ring"
+      className={cn(
+        'target:ring-2 target:ring-ring',
+        row
+          ? 'grid grid-cols-[72px_minmax(0,1fr)_auto] gap-x-3 gap-y-2 border-t border-border py-3'
+          : 'flex flex-col gap-2 rounded-md border border-border p-3',
+      )}
       data-testid="recommendation"
       data-recommendation-state={accept.data?.state ?? dismiss.data?.state ?? r.state}
     >
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        {position !== null && <span className="font-semibold">#{position}</span>}
-        <span className="font-medium">{r.title}</span>
-        <Badge tone="neutral" glyph={false}>
-          {ACTION_LABEL[r.proposedAction]}
-        </Badge>
-      </div>
-      <p className="text-sm text-muted-foreground">{r.rationale}</p>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-        <dt className="text-muted-foreground">Expected benefit</dt>
-        <dd>
-          {r.expectedBenefit.metricKey} {r.expectedBenefit.direction}
-          {r.expectedBenefit.magnitude ? ` (${r.expectedBenefit.magnitude})` : ''}
-        </dd>
-        <dt className="text-muted-foreground">Effort</dt>
-        <dd>
-          <Badge tone={effort.tone}>{effort.label}</Badge>
-        </dd>
-        <dt className="text-muted-foreground">Uncertainty</dt>
-        <dd>
-          <Badge tone={uncertainty.tone}>{uncertainty.label}</Badge>
-        </dd>
-        <dt className="text-muted-foreground">Evidence</dt>
-        <dd>
-          {r.insightIds.length
-            ? r.insightIds.map((id) => (
-                <code key={id} className="mr-1">
-                  {id}
-                </code>
-              ))
-            : 'none recorded'}
-        </dd>
-        {r.learning && (
-          <>
-            <dt className="text-muted-foreground">Hypothesis</dt>
-            <dd>{r.learning.hypothesis}</dd>
-          </>
-        )}
-      </dl>
-      {accept.data && (
-        <StatusBanner
-          tone="good"
-          title={`Accepted: ${ACTION_LABEL[accept.data.action]}`}
-          description={
-            <>
-              {accept.data.downstreamId ? (
+      {row ? (
+        <>
+          <span className="flex flex-col gap-0.5 text-xs">
+            <span>{ACTION_LABEL[r.proposedAction]}</span>
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <StatusDot tone={effort.tone} />
+              {effort.label} effort
+            </span>
+          </span>
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-pretty text-sm font-medium">
+              {position !== null && <span className="tabular-nums">#{position} </span>}
+              {r.title}
+            </span>
+            <span className="text-pretty text-xs text-muted-foreground">{r.rationale}</span>
+            <span className="text-2xs text-muted-foreground">
+              expected {r.expectedBenefit.metricKey.replace(/_/g, ' ')} {r.expectedBenefit.direction}
+              {r.expectedBenefit.magnitude ? ` (${r.expectedBenefit.magnitude})` : ''} · {uncertainty.label}{' '}
+              uncertainty · {r.insightIds.length}{' '}
+              {r.insightIds.length === 1 ? 'piece of evidence' : 'pieces of evidence'}
+              {r.learning && ` · hypothesis: ${r.learning.hypothesis}`}
+            </span>
+          </span>
+          <span className="flex flex-col items-end gap-1">
+            {accept.data && (
+              <span className="text-xs text-status-good" data-testid="recommendation-accepted">
+                Kept
+                {href && (
+                  <>
+                    {' · '}
+                    <Link to={href} className="underline underline-offset-2">
+                      Open {accept.data.downstreamType.replace(/_/g, ' ')}
+                    </Link>
+                  </>
+                )}
+              </span>
+            )}
+            {dismiss.data && <span className="text-xs text-muted-foreground">Dropped</span>}
+            {!accept.data && !dismiss.data && r.actions.length > 0 && (
+              <span
+                className="flex flex-col items-end gap-1"
+                role="group"
+                aria-label={`Actions for ${r.title}`}
+              >
+                {r.actions.includes(r.proposedAction) && (
+                  <Button
+                    size="sm"
+                    aria-expanded={open === r.proposedAction}
+                    aria-controls={`${formId}-form`}
+                    onClick={() => setOpen(open === r.proposedAction ? null : r.proposedAction)}
+                  >
+                    Keep
+                  </Button>
+                )}
+                {r.actions.includes('dismiss') && (
+                  <button
+                    type="button"
+                    aria-expanded={open === 'dismiss'}
+                    aria-controls={`${formId}-form`}
+                    onClick={() => setOpen(open === 'dismiss' ? null : 'dismiss')}
+                    className="min-h-6 rounded-sm px-1 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Drop
+                  </button>
+                )}
+              </span>
+            )}
+          </span>
+        </>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            {position !== null && <span className="font-semibold">#{position}</span>}
+            <span className="font-medium">{r.title}</span>
+            <Badge tone="neutral" glyph={false}>
+              {ACTION_LABEL[r.proposedAction]}
+            </Badge>
+          </div>
+          <p className="text-sm text-muted-foreground">{r.rationale}</p>
+          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+            <dt className="text-muted-foreground">Expected benefit</dt>
+            <dd>
+              {r.expectedBenefit.metricKey} {r.expectedBenefit.direction}
+              {r.expectedBenefit.magnitude ? ` (${r.expectedBenefit.magnitude})` : ''}
+            </dd>
+            <dt className="text-muted-foreground">Effort</dt>
+            <dd>
+              <Badge tone={effort.tone}>{effort.label}</Badge>
+            </dd>
+            <dt className="text-muted-foreground">Uncertainty</dt>
+            <dd>
+              <Badge tone={uncertainty.tone}>{uncertainty.label}</Badge>
+            </dd>
+            <dt className="text-muted-foreground">Evidence</dt>
+            <dd>
+              {r.insightIds.length
+                ? r.insightIds.map((id) => (
+                    <code key={id} className="mr-1">
+                      {id}
+                    </code>
+                  ))
+                : 'none recorded'}
+            </dd>
+            {r.learning && (
+              <>
+                <dt className="text-muted-foreground">Hypothesis</dt>
+                <dd>{r.learning.hypothesis}</dd>
+              </>
+            )}
+          </dl>
+          {accept.data && (
+            <StatusBanner
+              tone="good"
+              title={`Accepted: ${ACTION_LABEL[accept.data.action]}`}
+              description={
                 <>
-                  Created {accept.data.downstreamType.replace(/_/g, ' ')}{' '}
-                  <code>{accept.data.downstreamId}</code> with a back-reference to this recommendation.
+                  {accept.data.downstreamId ? (
+                    <>
+                      Created {accept.data.downstreamType.replace(/_/g, ' ')}{' '}
+                      <code>{accept.data.downstreamId}</code> with a back-reference to this recommendation.
+                    </>
+                  ) : (
+                    <>
+                      Your decision is recorded; open the {accept.data.downstreamType.replace(/_/g, ' ')} to
+                      act on it.
+                    </>
+                  )}
                 </>
-              ) : (
-                <>
-                  Your decision is recorded; open the {accept.data.downstreamType.replace(/_/g, ' ')} to act
-                  on it.
-                </>
-              )}
-            </>
-          }
-          actions={
-            href && (
-              <Button size="sm" asChild>
-                <Link to={href}>Open</Link>
-              </Button>
-            )
-          }
-          data-testid="recommendation-accepted"
-        />
-      )}
-      {dismiss.data && (
-        <StatusBanner
-          tone="neutral"
-          title="Dismissed"
-          description="The reason is stored with the learning record."
-        />
-      )}
-      {!accept.data && !dismiss.data && r.actions.length > 0 && (
-        <div className="flex flex-wrap gap-2" role="group" aria-label={`Actions for ${r.title}`}>
-          {r.actions.map((a) => (
-            <Button
-              key={a}
-              size="sm"
-              variant={a === 'dismiss' ? 'ghost' : 'primary'}
-              aria-expanded={open === a}
-              aria-controls={`${formId}-form`}
-              onClick={() => setOpen(open === a ? null : a)}
-            >
-              {a === 'dismiss' ? 'Dismiss' : ACTION_LABEL[a]}
-            </Button>
-          ))}
-        </div>
+              }
+              actions={
+                href && (
+                  <Button size="sm" asChild>
+                    <Link to={href}>Open</Link>
+                  </Button>
+                )
+              }
+              data-testid="recommendation-accepted"
+            />
+          )}
+          {dismiss.data && (
+            <StatusBanner
+              tone="neutral"
+              title="Dismissed"
+              description="The reason is stored with the learning record."
+            />
+          )}
+          {!accept.data && !dismiss.data && r.actions.length > 0 && (
+            <div className="flex flex-wrap gap-2" role="group" aria-label={`Actions for ${r.title}`}>
+              {r.actions.map((a) => (
+                <Button
+                  key={a}
+                  size="sm"
+                  variant={a === 'dismiss' ? 'ghost' : 'primary'}
+                  aria-expanded={open === a}
+                  aria-controls={`${formId}-form`}
+                  onClick={() => setOpen(open === a ? null : a)}
+                >
+                  {a === 'dismiss' ? 'Dismiss' : ACTION_LABEL[a]}
+                </Button>
+              ))}
+            </div>
+          )}
+        </>
       )}
       {open !== null && open !== 'dismiss' && (
         <form
           id={`${formId}-form`}
           onSubmit={submitAccept}
-          className="flex flex-col gap-2 border-t border-border pt-2"
+          className={cn('flex flex-col gap-2 border-t border-border pt-2', row && 'col-span-full')}
           noValidate
         >
           {open === 'create_brief' && (
@@ -407,7 +492,11 @@ export function RecommendationCard({
                 open === 'generate_variants' && !principal ? 'Choose a service principal first' : undefined
               }
             >
-              {accept.isPending ? 'Accepting…' : `Accept: ${ACTION_LABEL[open]}`}
+              {accept.isPending
+                ? 'Accepting…'
+                : row
+                  ? `Keep: ${ACTION_LABEL[open].toLowerCase()}`
+                  : `Accept: ${ACTION_LABEL[open]}`}
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(null)}>
               Cancel
@@ -419,7 +508,7 @@ export function RecommendationCard({
         <form
           id={`${formId}-form`}
           onSubmit={submitDismiss}
-          className="flex flex-col gap-2 border-t border-border pt-2"
+          className={cn('flex flex-col gap-2 border-t border-border pt-2', row && 'col-span-full')}
           noValidate
         >
           <Field
@@ -446,7 +535,7 @@ export function RecommendationCard({
               disabled={dismiss.isPending || !reason.trim()}
               disabledReason={reason.trim() ? undefined : 'Give a reason first'}
             >
-              {dismiss.isPending ? 'Dismissing…' : 'Dismiss'}
+              {dismiss.isPending ? 'Dismissing…' : row ? 'Drop' : 'Dismiss'}
             </Button>
             <Button type="button" size="sm" variant="ghost" onClick={() => setOpen(null)}>
               Cancel

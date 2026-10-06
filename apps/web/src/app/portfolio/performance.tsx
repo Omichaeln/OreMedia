@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useSearchParams } from 'react-router';
-import { Button, EmptyState, Skeleton } from '@oremedia/ui';
+import { EmptyState, PageHeader, Skeleton, cn } from '@oremedia/ui';
 import { TopBar } from '../root';
 import { RequestError } from '../../components/request-state';
 import { PERIODS } from '../../features/measurement/performance-helpers';
@@ -26,35 +26,44 @@ export function PortfolioPerformanceRoute() {
   return (
     <>
       <TopBar title="Performance" />
-      <main id="main" className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:px-8">
-        <header className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h1 className="text-xl font-semibold">Performance across the portfolio</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Every brand you can see, over the last {days} days against the {days} before, on the UTC
-              calendar; each post counted at {AGE_DAYS} days old, so posts published on different days
-              compare. Nothing is added across brands or companies; a comparison needs the minimum sample on
-              both sides.
-            </p>
-          </div>
-          <div role="group" aria-label="Period" className="flex gap-1">
-            {PERIODS.map(([d, label]) => (
-              <Button
-                key={d}
-                size="sm"
-                variant={days === d ? 'secondary' : 'ghost'}
-                aria-pressed={days === d}
-                onClick={() => {
-                  const p = new URLSearchParams(params);
-                  p.set('period', String(d));
-                  setParams(p, { replace: true });
-                }}
-              >
-                {label}
-              </Button>
-            ))}
-          </div>
-        </header>
+      <main
+        id="main"
+        className="om-in mx-auto flex w-full max-w-[1160px] flex-col gap-7 px-4 py-8 sm:px-9 sm:pt-9 sm:pb-[90px]"
+      >
+        <PageHeader
+          title="Performance"
+          description={`All brands · the last ${days} days against the ${days} before · UTC calendar`}
+          actions={
+            <div
+              role="group"
+              aria-label="Period"
+              className="flex h-8 overflow-hidden rounded-lg border border-border bg-card"
+            >
+              {PERIODS.map(([d, label]) => (
+                <button
+                  key={d}
+                  type="button"
+                  aria-pressed={days === d}
+                  onClick={() => {
+                    const p = new URLSearchParams(params);
+                    p.set('period', String(d));
+                    setParams(p, { replace: true });
+                  }}
+                  className={cn(
+                    'h-full px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    days === d ? 'bg-secondary font-medium' : 'hover:bg-card-tint',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          }
+        />
+        <p className="-mt-4 text-xs text-muted-foreground">
+          Each post counted at {AGE_DAYS} days old, so posts published on different days compare. Nothing is
+          added across brands or companies; a comparison needs the minimum sample on both sides.
+        </p>
         {companies.isPending && <Skeleton label="Loading companies" lines={4} />}
         {companies.isError && (
           <RequestError
