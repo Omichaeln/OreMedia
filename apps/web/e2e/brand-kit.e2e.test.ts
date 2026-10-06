@@ -335,7 +335,7 @@ describe.skipIf(!enabled)('brand system: one brand system, edited in place (buil
     expect(await page.getByRole('button', { name: /^Edit / }).count()).toBe(0);
     await page
       .getByRole('main')
-      .getByRole('button', { name: /^Voice & personality/ })
+      .getByRole('button', { name: /^Voice & writing/ })
       .last()
       .click();
     await expect.poll(() => new URL(page.url()).searchParams.get('section')).toBe('voice');

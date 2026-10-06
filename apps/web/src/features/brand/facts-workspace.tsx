@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { FactCategory, type FactOrigin, type FactSource, type FactState } from '@oremedia/contracts/brand';
-import { Badge, Button, EmptyState, Input, Panel, Skeleton, StatusBanner, type Tone } from '@oremedia/ui';
+import { Badge, Button, EmptyState, Input, Skeleton, StatusBanner, type Tone } from '@oremedia/ui';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
@@ -142,84 +142,82 @@ export function FactsWorkspace() {
     });
 
   return (
-    <Panel
-      title="Facts"
-      id="facts"
-      data-testid="facts-workspace"
-      actions={
-        <div className="flex flex-wrap gap-2">
-          {canDecide && (
-            <Button
-              size="sm"
-              disabled={selectedFacts.length < 2}
-              onClick={() => setDialog({ kind: 'merge', factIds: selectedFacts.map((f) => f.id) })}
-            >
-              Merge selected{selectedFacts.length > 0 ? ` (${selectedFacts.length})` : ''}
+    <section aria-label="Facts" className="flex flex-col" data-testid="facts-workspace">
+      <div className="mb-4 flex flex-col gap-2" role="search" aria-label="Filter facts">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <Input
+            type="search"
+            aria-label="Search facts"
+            placeholder="Search statements"
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            className="h-8 max-w-xs"
+            maxLength={200}
+          />
+          <div className="flex flex-wrap gap-2">
+            {canDecide && (
+              <Button
+                size="sm"
+                disabled={selectedFacts.length < 2}
+                onClick={() => setDialog({ kind: 'merge', factIds: selectedFacts.map((f) => f.id) })}
+              >
+                Merge selected{selectedFacts.length > 0 ? ` (${selectedFacts.length})` : ''}
+              </Button>
+            )}
+            <Button size="sm" variant="primary" onClick={() => setDialog({ kind: 'add' })}>
+              Add a fact
             </Button>
-          )}
-          <Button size="sm" variant="primary" onClick={() => setDialog({ kind: 'add' })}>
-            Add a fact
-          </Button>
+          </div>
         </div>
-      }
-    >
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <Select
+            size="sm"
+            aria-label="Show"
+            value={view}
+            onValueChange={(v) => setView(v as View)}
+            options={[...VIEWS]}
+          />
+          <Select
+            size="sm"
+            aria-label="State"
+            value={state}
+            onValueChange={(v) => setState(v as FactState | 'all')}
+            options={[
+              { value: 'all', label: 'Any state' },
+              ...(['proposed', 'approved', 'superseded', 'revoked'] as const).map((s) => ({
+                value: s,
+                label: STATE_LABEL[s],
+              })),
+            ]}
+          />
+          <Select
+            size="sm"
+            aria-label="Category"
+            value={category}
+            onValueChange={(v) => setCategory(v as FactCategory | 'all')}
+            options={[
+              { value: 'all', label: 'Any category' },
+              ...FactCategory.options.map((c) => ({ value: c, label: CATEGORY_LABEL[c] })),
+            ]}
+          />
+          <Select
+            size="sm"
+            aria-label="Origin"
+            value={origin}
+            onValueChange={(v) => setOrigin(v as FactOrigin | 'all')}
+            options={[
+              { value: 'all', label: 'Any origin' },
+              { value: 'user', label: 'Entered by a person' },
+              { value: 'extracted', label: 'Extracted from source' },
+              { value: 'inferred', label: 'Inferred' },
+              { value: 'suggested', label: 'AI suggestion' },
+            ]}
+          />
+        </div>
+      </div>
       <p className="sr-only" role="status" aria-live="polite">
         {status}
       </p>
-      <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-5" role="search" aria-label="Filter facts">
-        <Input
-          type="search"
-          aria-label="Search facts"
-          placeholder="Search statements"
-          value={searchText}
-          onChange={(e) => setSearchText(e.target.value)}
-          className="h-8 sm:col-span-2 lg:col-span-1"
-          maxLength={200}
-        />
-        <Select
-          size="sm"
-          aria-label="Show"
-          value={view}
-          onValueChange={(v) => setView(v as View)}
-          options={[...VIEWS]}
-        />
-        <Select
-          size="sm"
-          aria-label="State"
-          value={state}
-          onValueChange={(v) => setState(v as FactState | 'all')}
-          options={[
-            { value: 'all', label: 'Any state' },
-            ...(['proposed', 'approved', 'superseded', 'revoked'] as const).map((s) => ({
-              value: s,
-              label: STATE_LABEL[s],
-            })),
-          ]}
-        />
-        <Select
-          size="sm"
-          aria-label="Category"
-          value={category}
-          onValueChange={(v) => setCategory(v as FactCategory | 'all')}
-          options={[
-            { value: 'all', label: 'Any category' },
-            ...FactCategory.options.map((c) => ({ value: c, label: CATEGORY_LABEL[c] })),
-          ]}
-        />
-        <Select
-          size="sm"
-          aria-label="Origin"
-          value={origin}
-          onValueChange={(v) => setOrigin(v as FactOrigin | 'all')}
-          options={[
-            { value: 'all', label: 'Any origin' },
-            { value: 'user', label: 'Entered by a person' },
-            { value: 'extracted', label: 'Extracted from source' },
-            { value: 'inferred', label: 'Inferred' },
-            { value: 'suggested', label: 'AI suggestion' },
-          ]}
-        />
-      </div>
       {conflict && (
         <StatusBanner
           tone="warning"
@@ -267,12 +265,11 @@ export function FactsWorkspace() {
         />
       )}
       {groups.map((g) => (
-        <section key={g.category} aria-labelledby={`facts-${g.category}`} className="mb-5">
-          <h3 id={`facts-${g.category}`} className="mb-2 text-sm font-semibold">
-            {CATEGORY_LABEL[g.category]}{' '}
-            <span className="font-normal text-muted-foreground">({g.items.length})</span>
+        <section key={g.category} aria-labelledby={`facts-${g.category}`} className="mb-6">
+          <h3 id={`facts-${g.category}`} className="om-label mb-1">
+            {CATEGORY_LABEL[g.category]} <span className="tabular-nums">({g.items.length})</span>
           </h3>
-          <ul className="flex flex-col gap-2">
+          <ul className="flex flex-col">
             {g.items.map((f) => (
               <FactCard
                 key={f.id}
@@ -337,7 +334,7 @@ export function FactsWorkspace() {
           onConflict={setConflict}
         />
       )}
-    </Panel>
+    </section>
   );
 }
 
@@ -368,11 +365,7 @@ function FactCard({
   const live = isLive(f);
   const statementId = `fact-${f.id}-statement`;
   return (
-    <li
-      className="rounded-md border border-border p-3 text-sm"
-      data-testid="fact-card"
-      aria-labelledby={statementId}
-    >
+    <li className="border-t border-border py-3 text-sm" data-testid="fact-card" aria-labelledby={statementId}>
       <div className="flex items-start gap-2">
         {canDecide && live && (
           <input

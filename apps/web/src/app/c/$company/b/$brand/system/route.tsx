@@ -1,10 +1,22 @@
-import { useRef, useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { emptyBrandSystemDocument, type BrandSystemDocumentV1 } from '@oremedia/contracts/brand';
 import { ASSIST_SECTION_LABEL, type AssistSection } from '@oremedia/contracts/brand-assist';
-import { Badge, Button, EmptyState, Field, Input, Panel, Skeleton, StatusBanner, cn } from '@oremedia/ui';
+import {
+  Button,
+  Chip,
+  EmptyState,
+  Field,
+  Input,
+  Skeleton,
+  StatusBanner,
+  StatusDot,
+  cn,
+  type Tone,
+} from '@oremedia/ui';
 import { RequestError } from '../../../../../../components/request-state';
+import { Section } from '../../../../../../components/section';
 import { useToast } from '../../../../../../components/toast';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../../../../../components/dialog';
 import { useBrandContext } from '../../../../../../features/brand/brand-context';
@@ -41,12 +53,27 @@ import {
   useFacts,
   useObjectives,
   type BrandVersionSummary,
+  type ObjectiveDto,
 } from '../../../../../../features/brand/use-brand';
 import { useTRPC } from '../../../../../../lib/trpc';
 import { mutationIntent, useIntentKey } from '../../../../../../lib/intent-key';
 import { toUiError } from '../../../../../../lib/errors';
 
 type Doc = BrandSystemDocumentV1;
+
+/** The secondary navigation's eleven headings, as the interface lists them. */
+type GroupKey =
+  | 'overview'
+  | 'logo'
+  | 'colour'
+  | 'typography'
+  | 'voice'
+  | 'imagery'
+  | 'patterns'
+  | 'channels'
+  | 'facts'
+  | 'objectives'
+  | 'history';
 
 type SectionKey =
   | 'overview'
@@ -67,9 +94,33 @@ type SectionKey =
   | 'objectives'
   | 'history';
 
-/** The system's parts in the order the prototype reads them; each lives at `?section=`. */
+/**
+ * The interface's headings. The last one reads "History" where the interface says "Versions": D-22 keeps versions
+ * internal, so what the application shows there is each state the brand system was applied in, not versions to
+ * manage.
+ */
+const GROUPS: Array<{ key: GroupKey; label: string }> = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'logo', label: 'Logo' },
+  { key: 'colour', label: 'Colour' },
+  { key: 'typography', label: 'Typography & layout' },
+  { key: 'voice', label: 'Voice & writing' },
+  { key: 'imagery', label: 'Imagery' },
+  { key: 'patterns', label: 'Patterns & templates' },
+  { key: 'channels', label: 'Channel guidance' },
+  { key: 'facts', label: 'Facts' },
+  { key: 'objectives', label: 'Objectives' },
+  { key: 'history', label: 'History' },
+];
+
+/**
+ * The system's parts, each at its own `?section=`, grouped under the interface's headings: Messaging, Vocabulary,
+ * Writing patterns and Examples sit under Voice & writing; Templates and Visual patterns under Patterns & templates;
+ * Guidelines under Channel guidance. A heading with several parts shows them as a row of pills.
+ */
 const SECTIONS: Array<{
   key: SectionKey;
+  group: GroupKey;
   label: string;
   description: string;
   kit?: KitSection;
@@ -78,37 +129,42 @@ const SECTIONS: Array<{
 }> = [
   {
     key: 'overview',
+    group: 'overview',
     label: 'Overview',
     description: 'The brand at a glance: voice, palette and what each part holds.',
   },
   {
     key: 'logo',
+    group: 'logo',
     label: 'Logo',
     description: 'Variants with their grounds, clear space and minimum width.',
     kit: 'logos',
   },
   {
     key: 'colour',
+    group: 'colour',
     label: 'Colour',
     description: 'Tokens by role, and every text pairing against the contrast target.',
     kit: 'palette',
   },
   {
     key: 'typography',
+    group: 'typography',
     label: 'Typography & layout',
     description: 'Type roles bound to font files, spacing and radii.',
     kit: 'typography',
   },
   {
     key: 'voice',
+    group: 'voice',
     label: 'Voice & personality',
-    description:
-      'How the brand sounds: tone, personality, principles, terms, banned phrases, spelling and style rules.',
+    description: 'How the brand sounds. Copywriting agents and claim checks read this directly.',
     kit: 'voice',
     assist: 'voice',
   },
   {
     key: 'messaging',
+    group: 'voice',
     label: 'Messaging',
     description:
       'Positioning, value proposition, pillars proved by approved facts, key messages and audiences.',
@@ -117,6 +173,7 @@ const SECTIONS: Array<{
   },
   {
     key: 'vocabulary',
+    group: 'voice',
     label: 'Vocabulary',
     description: 'Terms the brand prefers, allows, avoids or never uses, with what to write instead.',
     kit: 'vocabulary',
@@ -124,6 +181,7 @@ const SECTIONS: Array<{
   },
   {
     key: 'writing',
+    group: 'voice',
     label: 'Writing patterns',
     description: 'How headlines, introductions, body copy, calls to action and long-form pieces are written.',
     kit: 'writing',
@@ -131,72 +189,95 @@ const SECTIONS: Array<{
   },
   {
     key: 'examples',
+    group: 'voice',
     label: 'Examples',
     description: 'On-brand and off-brand copy with why, and the on-brand rewrite.',
     kit: 'examples',
     assist: 'examples',
   },
   {
-    key: 'templates',
-    label: 'Templates',
-    description: 'Copy templates: the parts a piece of copy follows, in order, per content type and channel.',
-    kit: 'templates',
-    assist: 'templates',
-  },
-  {
     key: 'imagery',
+    group: 'imagery',
     label: 'Imagery',
     description: 'Reference images that show what on-brand photography looks like.',
     kit: 'imagery',
   },
   {
     key: 'patterns',
+    group: 'patterns',
     label: 'Visual patterns',
-    description: 'Named visual layouts and the creative templates that implement them.',
+    description: 'Reusable layouts. The layout agent only uses eligible template versions listed here.',
     kit: 'patterns',
   },
   {
+    key: 'templates',
+    group: 'patterns',
+    label: 'Templates',
+    description: 'Copy templates: the parts a piece of copy follows, in order, per content type and channel.',
+    kit: 'templates',
+    assist: 'templates',
+  },
+  {
     key: 'channels',
+    group: 'channels',
     label: 'Channel guidance',
-    description: "Defaults for every channel and what changes per channel, beside each platform's limits.",
+    description: "How the voice adapts per channel, beside each platform's limits.",
     kit: 'channels',
     assist: 'channels',
   },
   {
     key: 'guidelines',
+    group: 'channels',
     label: 'Guidelines',
     description: 'The brand skill text agents read with the brand system.',
     kit: 'guidelines',
   },
   {
     key: 'facts',
+    group: 'facts',
     label: 'Facts',
     description:
-      'What copy may state, by category, with sources and review dates: proposed by anyone, approved by a brand manager.',
+      'Anything copy can assert — offers, prices, claims — must be an approved fact with evidence. Proposed by anyone, approved by a brand manager.',
     assist: 'facts',
   },
   {
     key: 'objectives',
+    group: 'objectives',
     label: 'Objectives',
-    description: 'The metric the brand is steering by, with its guardrails.',
+    description:
+      'One objective is active at a time. Recommendations are ranked against it — not against likes.',
   },
   {
     key: 'history',
+    group: 'history',
     label: 'History',
     description: 'Each time the brand system was applied: who, when and what changed; compare and restore.',
   },
 ];
 
 const OVERVIEW = SECTIONS[0] as (typeof SECTIONS)[number];
+const OVERVIEW_GROUP = GROUPS[0] as (typeof GROUPS)[number];
 
 /** What is open in the editor: one section of the brand system, or a proposed update with every section. */
 type Editing = { kind: 'section'; section: SectionKey } | { kind: 'proposal' } | null;
 
+/** The header's state pill: a dot beside the word, as the interface sets states. */
+function StatePill({ tone, children }: { tone: Tone; children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-2.5 py-[3px] text-xs">
+      <StatusDot tone={tone} size="sm" />
+      {children}
+    </span>
+  );
+}
+
 /**
- * Spec 21.2 brand system, D-22: one brand system per brand, edited in place. The parts of the system in a side list,
- * the applied brand system read section by section; a person who may save it edits a section in place and the save
- * applies at once. A proposed update (an imported brand skill, an agent's suggestion) waits at the top until a person
- * reviews and saves it, or discards it. Facts and objectives are their own panels.
+ * Spec 21.2 brand system, D-22: one brand system per brand, edited in place. The interface's secondary navigation
+ * on the left, the brand's name with its state in the header (no record id: the application never shows ids), the
+ * applied brand system read section by section; a
+ * person who may save it edits a section in place and the save applies at once. A proposed update (an imported
+ * brand skill, an agent's suggestion) waits at the top until a person reviews and saves it, or discards it. Facts,
+ * objectives and the history are their own sections.
  */
 export function BrandSystemRoute() {
   const { companyId, brand, brandId } = useBrandContext();
@@ -208,6 +289,8 @@ export function BrandSystemRoute() {
   const effectiveFacts = useFacts(brandId, { effective: true });
   const proposedFacts = useFacts(brandId, 'proposed');
   const section = SECTIONS.find((x) => x.key === params.get('section')) ?? OVERVIEW;
+  const group = GROUPS.find((g) => g.key === section.group) ?? OVERVIEW_GROUP;
+  const siblings = SECTIONS.filter((x) => x.group === section.group);
   const appliedId = brand.publishedVersionId ?? null;
   const applied = useBrandVersion(brandId, appliedId);
   const proposal = pendingProposal(versions.data?.items ?? [], appliedId);
@@ -300,54 +383,69 @@ export function BrandSystemRoute() {
     : appliedDoc?.guidelines !== undefined;
 
   return (
-    <main id="main" className="flex min-h-full flex-col lg:flex-row">
-      <nav aria-label="Brand system sections" className="shrink-0 border-border lg:w-56 lg:border-r">
-        <p className="hidden px-6 pb-2 pt-6 text-xs font-semibold uppercase tracking-wide text-muted-foreground lg:block">
-          Brand system
-        </p>
-        <ul className="flex gap-1 overflow-x-auto px-4 py-2 lg:flex-col lg:gap-0.5 lg:px-3 lg:py-0">
-          {SECTIONS.map((x) => (
-            <li key={x.key} className="shrink-0">
-              <button
-                type="button"
-                aria-current={x.key === section.key ? 'page' : undefined}
-                onClick={() => open(x.key)}
-                className={cn(
-                  // relative: the sr-only count is positioned inside the scrolling strip, not past the page edge
-                  'relative flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-left text-sm',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  x.key === section.key
-                    ? 'bg-secondary font-medium text-secondary-foreground'
-                    : 'text-muted-foreground hover:bg-secondary/60 hover:text-foreground',
-                )}
-              >
-                {x.label}
-                {x.key === 'facts' && proposedCount > 0 && (
-                  <span className="text-xs tabular-nums text-status-critical">
-                    {proposedCount}
-                    <span className="sr-only"> proposed</span>
-                  </span>
-                )}
-              </button>
-            </li>
-          ))}
+    <main id="main" className="om-in grid min-h-full md:grid-cols-[200px_minmax(0,1fr)]">
+      <nav
+        aria-label="Brand system sections"
+        className={cn(
+          'sticky top-0 z-10 flex gap-px overflow-x-auto whitespace-nowrap border-b border-border bg-background px-3 py-2.5',
+          'md:h-[calc(100vh-52px)] md:flex-col md:self-start md:overflow-y-auto md:border-b-0 md:border-r md:py-8 wide:h-screen',
+        )}
+      >
+        <p className="om-label shrink-0 px-2.5 py-[7px] md:py-0 md:pb-3">Brand system</p>
+        <ul className="flex gap-px md:flex-col">
+          {GROUPS.map((g) => {
+            const first = SECTIONS.find((x) => x.group === g.key) ?? OVERVIEW;
+            const current = g.key === section.group;
+            return (
+              <li key={g.key} className="shrink-0">
+                <button
+                  type="button"
+                  aria-current={current ? 'page' : undefined}
+                  onClick={() => open(first.key)}
+                  className={cn(
+                    'flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-[7px] text-left text-sm',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                    current
+                      ? 'bg-secondary font-medium text-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  <span>{g.label}</span>
+                  {g.key === 'facts' && proposedCount > 0 && (
+                    <span className="text-xs tabular-nums text-accent-ink">
+                      {proposedCount}
+                      <span className="sr-only"> proposed</span>
+                    </span>
+                  )}
+                </button>
+              </li>
+            );
+          })}
         </ul>
       </nav>
-      <div className="min-w-0 flex-1">
-        <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-8">
-          <h1 className="text-xl font-semibold">{brand.name}</h1>
+      <div className="min-w-0">
+        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-border px-4 py-5 sm:px-10 sm:py-6">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <h1 className="text-xl font-bold tracking-[-0.01em]">{brand.name}</h1>
+            {appliedId !== null ? (
+              <StatePill tone="good">Published</StatePill>
+            ) : (
+              <StatePill tone="neutral">Not saved yet</StatePill>
+            )}
+            {proposal && <StatePill tone="info">Proposed update</StatePill>}
+          </div>
           {canSave && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-wrap gap-1.5">
               <Button size="sm" onClick={() => setAssistant('all')} disabled={!startDoc}>
                 Ask AI
               </Button>
-              <Button size="sm" variant="ghost" onClick={() => openSetup()}>
+              <Button size="sm" onClick={() => openSetup()}>
                 Import sources
               </Button>
             </div>
           )}
         </header>
-        <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-6 sm:px-8">
+        <div className="flex w-full max-w-[960px] flex-col gap-9 px-4 pb-20 pt-6 sm:px-10 sm:pt-8">
           {waitingJob && !setupOpen && !reviewing && (
             <StatusBanner
               tone="info"
@@ -395,25 +493,38 @@ export function BrandSystemRoute() {
             />
           )}
           {!reviewing && !setupOpen && (
-            <>
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-semibold">{section.label}</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {canSave && section.assist && !editingSection && startDoc && (
-                    <Button size="sm" onClick={() => setAssistant(section.assist ?? null)}>
-                      Ask AI<span className="sr-only"> about {section.label}</span>
-                    </Button>
+            <div key={section.key} className="om-in flex flex-col gap-9">
+              {section.key !== 'overview' && (
+                <div className="flex flex-col gap-4">
+                  <div className="flex flex-wrap items-end justify-between gap-4">
+                    <div className="flex min-w-[280px] flex-1 flex-col gap-1">
+                      <h2 className="text-xl font-bold tracking-[-0.01em]">{group.label}</h2>
+                      <p className="text-pretty text-sm text-muted-foreground">{section.description}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {canSave && section.assist && !editingSection && startDoc && (
+                        <Button onClick={() => setAssistant(section.assist ?? null)}>
+                          Ask AI<span className="sr-only"> about {section.label}</span>
+                        </Button>
+                      )}
+                      {editable && !editingSection && startDoc && (
+                        <Button onClick={() => setEditing({ kind: 'section', section: section.key })}>
+                          Edit<span className="sr-only"> {section.label}</span>
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                  {siblings.length > 1 && (
+                    <nav aria-label={`${group.label} parts`} className="flex flex-wrap gap-1">
+                      {siblings.map((x) => (
+                        <Chip key={x.key} selected={x.key === section.key} onClick={() => open(x.key)}>
+                          {x.label}
+                        </Chip>
+                      ))}
+                    </nav>
                   )}
-                  {editable && !editingSection && startDoc && (
-                    <Button size="sm" onClick={() => setEditing({ kind: 'section', section: section.key })}>
-                      Edit<span className="sr-only"> {section.label}</span>
-                    </Button>
-                  )}
                 </div>
-              </div>
+              )}
               {sectionJobs
                 .filter((j) => j.scope === 'all' || j.scope === section.assist)
                 .map((j) => (
@@ -424,11 +535,11 @@ export function BrandSystemRoute() {
                         ? 'AI suggestions'
                         : `AI suggestions for ${ASSIST_SECTION_LABEL[j.scope]}`
                     }
-                    className="rounded-md border border-border p-3"
+                    className="rounded-xl border border-border bg-card p-4"
                     data-testid="section-assistant-results"
                   >
                     <div className="mb-2 flex items-center justify-between gap-2">
-                      <h3 className="text-sm font-semibold">AI suggestions</h3>
+                      <h3 className="text-base font-bold">AI suggestions</h3>
                       <Button
                         size="sm"
                         variant="ghost"
@@ -513,6 +624,7 @@ export function BrandSystemRoute() {
                       doc={appliedDoc}
                       brandName={brand.name}
                       facts={effectiveFacts.data?.items}
+                      proposedFacts={proposedFacts.data ? proposedCount : undefined}
                       onOpen={open}
                     />
                   )}
@@ -524,7 +636,7 @@ export function BrandSystemRoute() {
                   )}
                 </>
               )}
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -537,17 +649,27 @@ function SectionView({
   doc,
   brandName,
   facts,
+  proposedFacts,
   onOpen,
 }: {
   section: SectionKey;
   doc: Doc;
   brandName: string;
   facts: Array<{ id: string; statement: string }> | undefined;
+  proposedFacts: number | undefined;
   onOpen: (key: string) => void;
 }) {
   switch (section) {
     case 'overview':
-      return <OverviewView doc={doc} brandName={brandName} factCount={facts?.length} onOpen={onOpen} />;
+      return (
+        <OverviewView
+          doc={doc}
+          brandName={brandName}
+          factCount={facts?.length}
+          proposedFactCount={proposedFacts}
+          onOpen={onOpen}
+        />
+      );
     case 'logo':
       return <LogoView doc={doc} />;
     case 'colour':
@@ -586,8 +708,9 @@ const proposalOrigin = (next: Doc, applied: Doc | null): string | null =>
     : null;
 
 /**
- * D-22: the one banner for a pending proposal: what it changes against the applied brand system and where it came
- * from, with Review (the full editor on the proposal) and Discard (confirmed first) for those who may save.
+ * D-22: the one strip for a pending proposal, as the interface notes a draft in view: what it changes against the
+ * applied brand system and where it came from, with Review (the full editor on the proposal) and Discard (confirmed
+ * first) for those who may save.
  */
 function ProposalBanner({
   brandId,
@@ -630,39 +753,39 @@ function ProposalBanner({
   const origin = doc ? proposalOrigin(doc, appliedDoc) : null;
   return (
     <>
-      <StatusBanner
-        tone="info"
-        title="A proposed update is waiting"
-        description={
-          <>
-            {origin && <span className="block">{origin}</span>}
-            {changes && changes.length > 0 && (
-              <span className="block">It changes {changes.map((c) => c.label).join(', ')}.</span>
-            )}
-            {changes && changes.length === 0 && (
-              <span className="block">It has the same content as the brand system.</span>
-            )}
-            <span className="block">
-              {canSave
-                ? 'Nothing applies until you review and save it.'
-                : 'Nothing applies until a brand manager, admin or owner saves it.'}
-            </span>
-          </>
-        }
-        actions={
-          canSave && (
-            <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="primary" onClick={onReview}>
-                Review
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => setDiscarding(true)}>
-                Discard
-              </Button>
-            </div>
-          )
-        }
+      <div
+        role="status"
+        className="om-in flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg bg-accent-tint px-3.5 py-2.5 text-sm"
         data-testid="proposed-update"
-      />
+      >
+        <p className="min-w-0 flex-1 text-pretty">
+          <span className="font-medium">A proposed update is waiting.</span>
+          {origin && <> {origin}</>}
+          {changes && changes.length > 0 && <> It changes {changes.map((c) => c.label).join(', ')}.</>}
+          {changes && changes.length === 0 && <> It has the same content as the brand system.</>}{' '}
+          {canSave
+            ? 'Nothing applies until you review and save it.'
+            : 'Nothing applies until a brand manager, admin or owner saves it.'}
+        </p>
+        {canSave && (
+          <div className="flex shrink-0 items-center gap-3">
+            <button
+              type="button"
+              className="rounded-md font-medium hover:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={onReview}
+            >
+              Review <span aria-hidden="true">→</span>
+            </button>
+            <button
+              type="button"
+              className="rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={() => setDiscarding(true)}
+            >
+              Discard
+            </button>
+          </div>
+        )}
+      </div>
       <Dialog open={discarding} onOpenChange={(o) => !o && setDiscarding(false)}>
         {discarding && (
           <DialogContent
@@ -713,12 +836,12 @@ function ProposalReview({
   const next = useBrandVersion(brandId, proposal.id);
   const changes = next.data && appliedDoc ? changedSections(next.data.document, appliedDoc) : null;
   return (
-    <section aria-labelledby="proposal-review" className="flex flex-col gap-3" data-testid="proposal-review">
-      <div>
-        <h2 id="proposal-review" className="text-lg font-semibold">
+    <section aria-labelledby="proposal-review" className="flex flex-col gap-4" data-testid="proposal-review">
+      <div className="flex flex-col gap-1">
+        <h2 id="proposal-review" className="text-xl font-bold tracking-[-0.01em]">
           Proposed update
         </h2>
-        <p className="mt-1 text-sm text-muted-foreground">
+        <p className="text-pretty text-sm text-muted-foreground">
           {changes && changes.length > 0 ? `Changes ${changes.map((c) => c.label).join(', ')}. ` : ''}
           Review every section, edit what is not right, then save to apply it.
         </p>
@@ -738,6 +861,13 @@ function ProposalReview({
   );
 }
 
+const day = (iso: string) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+const isActive = (o: ObjectiveDto) => !o.activeUntil || new Date(o.activeUntil).getTime() > Date.now();
+
+/**
+ * Objectives as the interface lays them out: the active one as a card (since when, its name, metric and guardrails),
+ * the closed ones as a ruled history, then the form that sets a new one and closes the current.
+ */
 function Objectives() {
   const { brandId } = useBrandContext();
   const trpc = useTRPC();
@@ -768,53 +898,93 @@ function Objectives() {
       activeFrom: new Date().toISOString(),
     });
   };
+  const items = objectives.data?.items ?? [];
+  const active = items.filter(isActive);
+  const closed = items.filter((o) => !isActive(o));
   return (
-    <Panel title="Objectives">
+    <div className="flex flex-col gap-7">
       {objectives.isPending && <Skeleton label="Loading objectives" lines={2} />}
       {objectives.isError && (
         <RequestError error={objectives.error} onRetry={() => void objectives.refetch()} />
       )}
-      {objectives.isSuccess && objectives.data.items.length === 0 && (
+      {objectives.isSuccess && items.length === 0 && (
         <EmptyState
           title="No objective set"
           description="One objective is active at a time; setting a new one closes the previous."
         />
       )}
-      {objectives.isSuccess && objectives.data.items.length > 0 && (
-        <ul className="flex flex-col divide-y divide-border text-sm">
-          {objectives.data.items.map((o) => {
-            const active = !o.activeUntil || new Date(o.activeUntil).getTime() > Date.now();
-            return (
-              <li key={o.id} className="flex flex-wrap items-center gap-2 py-2">
-                <Badge tone={active ? 'good' : 'neutral'}>{active ? 'Active' : 'Closed'}</Badge>
-                <span className="font-medium">{o.name}</span>
-                <span className="text-muted-foreground">primary metric {o.primaryMetricKey}</span>
+      {active.map((o) => (
+        <div
+          key={o.id}
+          className="flex flex-col gap-3.5 rounded-xl border border-border bg-card p-5"
+          data-testid="objective-active"
+        >
+          <p className="flex items-center gap-2 text-xs text-muted-foreground">
+            <StatusDot tone="good" size="sm" />
+            Active since {day(o.activeFrom)}
+          </p>
+          <p className="text-xl font-bold tracking-[-0.01em]">{o.name}</p>
+          <dl className="grid gap-x-4 gap-y-2 text-sm sm:grid-cols-[140px_minmax(0,1fr)]">
+            <dt className="text-muted-foreground">Primary metric</dt>
+            <dd className="text-xs tabular-nums">{o.primaryMetricKey}</dd>
+            {o.guardrailMetricKeys.length > 0 && (
+              <>
+                <dt className="text-muted-foreground">Guardrails</dt>
+                <dd className="text-xs tabular-nums">{o.guardrailMetricKeys.join(' · ')}</dd>
+              </>
+            )}
+          </dl>
+        </div>
+      ))}
+      {closed.length > 0 && (
+        <Section id="objective-history" title="History">
+          <ul className="flex flex-col">
+            {closed.map((o) => (
+              <li
+                key={o.id}
+                className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-border py-[11px] text-sm first:border-t-0"
+              >
+                <span>
+                  {o.name}{' '}
+                  <span className="text-xs tabular-nums text-muted-foreground">{o.primaryMetricKey}</span>
+                </span>
+                <span className="text-muted-foreground">
+                  {day(o.activeFrom)}
+                  {o.activeUntil ? ` – ${day(o.activeUntil)}` : ''}
+                </span>
               </li>
-            );
-          })}
-        </ul>
+            ))}
+          </ul>
+        </Section>
       )}
       <form
         onSubmit={submit}
-        className="mt-4 grid gap-3 border-t border-border pt-3 sm:grid-cols-2"
+        className="grid gap-2.5 border-t border-border pt-4 sm:grid-cols-[repeat(auto-fit,minmax(200px,1fr))] sm:items-end"
         noValidate
       >
         <Field
-          label="Objective"
+          label="New objective"
           htmlFor="obj-name"
           error={set.isError ? toUiError(set.error).message : undefined}
         >
           <Input id="obj-name" value={name} onChange={(e) => setName(e.target.value)} maxLength={160} />
         </Field>
-        <Field label="Primary metric key" htmlFor="obj-metric" hint="e.g. qualified_enquiries">
-          <Input id="obj-metric" value={metric} onChange={(e) => setMetric(e.target.value)} maxLength={80} />
+        <Field label="Primary metric key" htmlFor="obj-metric">
+          <Input
+            id="obj-metric"
+            value={metric}
+            onChange={(e) => setMetric(e.target.value)}
+            maxLength={80}
+            placeholder="e.g. qualified_enquiries"
+            className="tabular-nums"
+          />
         </Field>
-        <div className="sm:col-span-2">
+        <div>
           <Button type="submit" disabled={set.isPending || !name.trim() || !metric.trim()}>
-            Set objective
+            Set objective{active.length > 0 ? ' (closes current)' : ''}
           </Button>
         </div>
       </form>
-    </Panel>
+    </div>
   );
 }
