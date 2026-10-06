@@ -72,6 +72,7 @@ import {
   AssetList,
   AssetRetire,
   AssetSearch,
+  AssetUsagesList,
   BrandFontsList,
   UploadIntentGet,
   UsageRightsInput,
@@ -2949,6 +2950,13 @@ export function createMockRouter(backend: MockBackend) {
             items: ids.map((id, i) => ({ ...assetVersionOf(a), id, number: ids.length - i })),
             nextCursor: null,
           };
+        }),
+      }),
+      /** Where an asset's versions are used; nothing in the mock references one yet. */
+      usages: t.router({
+        list: query.input(AssetUsagesList).query(({ input }) => {
+          backend.asset(input.assetId);
+          return { items: [], nextCursor: null };
         }),
       }),
       /** The asset as the inspector and the brand kit editor read it. */

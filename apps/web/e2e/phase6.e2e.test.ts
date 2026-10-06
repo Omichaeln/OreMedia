@@ -717,6 +717,8 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
   it('RA-01: every channel provider is listed with its activation state and the reason it cannot be connected, credential references by name only', async () => {
     const ready = page.getByTestId('provider-linkedin_page');
     expect(await ready.getAttribute('data-provider-state')).toBe('ready');
+    // The activation state, credential references and certifications are behind the row's Details.
+    await ready.getByRole('button', { name: 'Details of LinkedIn Page' }).click();
     expect(await ready.textContent()).toContain('Ready');
     expect(await ready.getByTestId('credential-refs').textContent()).toContain(
       'PROVIDER_LINKEDIN_PAGE_SECRET_REF (set)',
@@ -735,6 +737,7 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     expect(await missing.getByTestId('unavailable-reason').textContent()).toContain(
       'PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF is not set',
     );
+    await missing.getByRole('button', { name: 'Details of Instagram Business' }).click();
     expect(await missing.getByTestId('credential-refs').textContent()).toContain(
       'PROVIDER_INSTAGRAM_BUSINESS_SECRET_REF (not set)',
     );
@@ -745,6 +748,8 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
 
   it('PR-06: each provider lists every capability with its certification state; an uncertified one is labelled', async () => {
     const ready = page.getByTestId('provider-linkedin_page');
+    if ((await ready.getByTestId('capability-certifications').count()) === 0)
+      await ready.getByRole('button', { name: 'Details of LinkedIn Page' }).click();
     const caps = ready.getByTestId('capability-certifications');
     const state = (capability: string) =>
       caps.locator(`[data-capability="${capability}"]`).getAttribute('data-capability-state');
@@ -754,6 +759,10 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
       'Publish video: not certified',
     );
     // A provider that is not certified at all shows every capability it supports as not certified.
+    await page
+      .getByTestId('provider-facebook_page')
+      .getByRole('button', { name: 'Details of Facebook Page' })
+      .click();
     const facebook = page.getByTestId('provider-facebook_page').getByTestId('capability-certifications');
     expect(await facebook.locator('[data-capability-state="certified"]').count()).toBe(0);
     expect(await facebook.locator('[data-capability-state="uncertified"]').count()).toBeGreaterThan(0);
@@ -870,6 +879,8 @@ describe.skipIf(!enabled)('phase 6 screens (built app in Chromium, mock transpor
     await open('settings');
     const row = page.getByTestId(`channel-${P5.channels.two}`);
     await expect.poll(() => row.count(), { timeout: 15_000 }).toBe(1);
+    // Disconnect is in the row's Manage card, with the health, scopes and publishing detail.
+    await row.getByRole('button', { name: 'Manage' }).click();
     await row.getByRole('button', { name: 'Disconnect' }).click();
     await expect.poll(() => page.getByRole('alertdialog').count()).toBe(1);
     await page.getByRole('button', { name: 'Keep connected' }).click();

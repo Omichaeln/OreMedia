@@ -112,7 +112,7 @@ function SetPasswordForm({ hasPassword, email }: { hasPassword: boolean; email: 
         <StatusBanner
           tone="warning"
           title="Sign in again to set a password"
-          description="Setting a first password needs a sign-in from the last 15 minutes. Sign out, sign in with Google, then come back to Settings → Account."
+          description="Setting a first password needs a sign-in from the last 15 minutes. Sign out, sign in with Google, then come back to Settings → Appearance."
           data-testid="recent-sign-in-required"
           actions={
             <Button size="sm" variant="secondary" onClick={() => void signOut()}>
@@ -235,7 +235,7 @@ function RemovePassword() {
 }
 
 /**
- * Settings → Account: the signed-in person's own password, the second sign-in method next to Google. Setting or
+ * Settings → Appearance, Account: the signed-in person's own password, the second sign-in method next to Google. Setting or
  * changing it signs out every other session; removing it is offered only while Google is linked, so nobody is left
  * without a way in.
  */

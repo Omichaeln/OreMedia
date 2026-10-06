@@ -96,3 +96,13 @@ export function usePlanItems(briefId: string | null) {
     enabled: briefId !== null,
   });
 }
+
+/** One content revision by id: its number names it on the review screen ("revision 3", "Approve revision 3"). */
+export function useRevision(revisionId: string | null) {
+  const trpc = useTRPC();
+  return useQuery({
+    ...trpc.content.revisions.get.queryOptions({ revisionId: revisionId ?? '' }),
+    enabled: revisionId !== null,
+    retry: false,
+  });
+}

@@ -34,3 +34,31 @@ export function Section({
     </section>
   );
 }
+
+/**
+ * A group's heading as the interface sets it on Settings ("Connected channels", "Theme"): a 15 px bold title, a muted
+ * line under it, an action at the right end; the rows under it carry their own rules.
+ */
+export function GroupHeader({
+  id,
+  title,
+  description,
+  action,
+}: {
+  id: string;
+  title: string;
+  description?: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <h2 id={id} className="text-md font-bold">
+          {title}
+        </h2>
+        {description && <p className="text-sm text-muted-foreground">{description}</p>}
+      </div>
+      {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
+    </div>
+  );
+}

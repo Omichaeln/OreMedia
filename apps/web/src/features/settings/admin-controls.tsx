@@ -7,7 +7,7 @@ import {
   defaultPolicyDocument,
   type PolicyDocumentV1,
 } from '@oremedia/contracts/brand';
-import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
+import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea, cn } from '@oremedia/ui';
 import { Dialog, DialogActions, DialogClose, DialogContent } from '../../components/dialog';
 import { Select } from '../../components/select';
 import { RequestError } from '../../components/request-state';
@@ -187,14 +187,17 @@ export function ReleasePolicy({ canManage }: { canManage: boolean }) {
         <RequestError error={policy.error} onRetry={() => void policy.refetch()} />
       )}
       {doc && (
-        <dl className="flex flex-col divide-y divide-border text-sm">
+        <dl className="flex flex-col text-sm">
           {policyRows(doc).map(([label, hint, value]) => (
-            <div key={label} className="flex flex-wrap items-start justify-between gap-x-6 gap-y-1 py-3">
+            <div
+              key={label}
+              className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border-t border-border py-3.5"
+            >
               <dt className="min-w-0">
-                <span className="font-medium">{label}</span>
+                <span className="block text-base">{label}</span>
                 <span className="block text-xs text-muted-foreground">{hint}</span>
               </dt>
-              <dd className="text-right">{value}</dd>
+              <dd className="max-w-xs text-right text-muted-foreground">{value}</dd>
             </div>
           ))}
         </dl>
@@ -302,10 +305,16 @@ function KillSwitchRow({
   );
   const ui = set.isError ? toUiError(set.error) : null;
   return (
-    <li className="flex flex-col gap-2 py-3" data-testid={`kill-${scope}-${brandId ? 'brand' : 'company'}`}>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-sm font-medium">
+    <li
+      className={cn(
+        'flex flex-col gap-2 rounded-xl border bg-card px-[18px] py-4',
+        engaged && !byCompany ? 'border-status-critical-dot' : 'border-border',
+      )}
+      data-testid={`kill-${scope}-${brandId ? 'brand' : 'company'}`}
+    >
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <p className="text-base font-bold">
             {label} · {brandId ? 'this brand' : 'whole company'}
           </p>
           <p className="text-xs text-muted-foreground">{effect}</p>
@@ -399,7 +408,7 @@ export function KillSwitches() {
         Hold mandate publishing or refuse new agent runs, for this brand or the whole company. Engaging never
         deletes or cancels anything, and the change is audited.
       </p>
-      <ul className="flex flex-col divide-y divide-border">
+      <ul className="flex flex-col gap-3">
         {SWITCHES.flatMap((s) => [
           <KillSwitchRow key={`${s.scope}:b`} {...s} brandId={brandId} brandName={brand.name} />,
           <KillSwitchRow key={`${s.scope}:c`} {...s} brandId={undefined} brandName={brand.name} />,
