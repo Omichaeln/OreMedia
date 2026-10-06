@@ -641,7 +641,13 @@ export function PerformanceScreen() {
                                 windowStart={range.from}
                                 windowEnd={range.to}
                                 channelName={channel}
-                                onClose={() => update({ post: null })}
+                                onClose={() => {
+                                  update({ post: null });
+                                  // Focus goes back to the row that opened the post (as the calendar's drawer does).
+                                  document
+                                    .querySelector<HTMLButtonElement>(`tr[data-publication="${id}"] button`)
+                                    ?.focus();
+                                }}
                               />
                             </td>
                           </tr>
