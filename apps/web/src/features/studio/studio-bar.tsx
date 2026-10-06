@@ -24,39 +24,41 @@ export function StudioBar({
   const { companyId, companyName, brand } = useBrandContext();
   return (
     <header className="flex min-h-[52px] shrink-0 flex-wrap items-center gap-x-3.5 gap-y-2 border-b border-border bg-card px-4 py-2">
-      <Link
-        to={back.to}
-        aria-label={back.label}
-        title={back.title ?? back.label}
-        className="-ml-2 inline-flex min-h-6 items-center rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <span aria-hidden="true">←</span>
-      </Link>
-      <nav aria-label="Breadcrumb" className="min-w-0 max-w-full">
-        <ol className="flex min-w-0 items-center gap-2 whitespace-nowrap text-sm">
-          <li className="sr-only">{companyName ?? companyId}</li>
-          <li className="min-w-0 truncate text-muted-foreground">{brand.name}</li>
-          <Separator />
-          <li className="text-muted-foreground">Studio</li>
-          {crumbs.map((crumb, i) => {
-            const current = i === crumbs.length - 1;
-            return (
-              <Fragment key={i}>
-                <Separator />
-                <li
-                  aria-current={current ? 'page' : undefined}
-                  className={cn(
-                    'min-w-0',
-                    current ? 'truncate font-medium text-foreground' : 'text-muted-foreground',
-                  )}
-                >
-                  {crumb}
-                </li>
-              </Fragment>
-            );
-          })}
-        </ol>
-      </nav>
+      <div className="flex min-w-0 max-w-full items-center gap-3.5">
+        <Link
+          to={back.to}
+          aria-label={back.label}
+          title={back.title ?? back.label}
+          className="-ml-2 inline-flex min-h-6 items-center rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <span aria-hidden="true">←</span>
+        </Link>
+        <nav aria-label="Breadcrumb" className="min-w-0">
+          <ol className="flex min-w-0 items-center gap-2 whitespace-nowrap text-sm">
+            <li className="sr-only">{companyName ?? companyId}</li>
+            <li className="min-w-0 truncate text-muted-foreground">{brand.name}</li>
+            <Separator />
+            <li className="text-muted-foreground">Studio</li>
+            {crumbs.map((crumb, i) => {
+              const current = i === crumbs.length - 1;
+              return (
+                <Fragment key={i}>
+                  <Separator />
+                  <li
+                    aria-current={current ? 'page' : undefined}
+                    className={cn(
+                      'min-w-0',
+                      current ? 'truncate font-medium text-foreground' : 'text-muted-foreground',
+                    )}
+                  >
+                    {crumb}
+                  </li>
+                </Fragment>
+              );
+            })}
+          </ol>
+        </nav>
+      </div>
       {status}
       {actions && <div className="ml-auto flex flex-wrap items-center gap-1.5">{actions}</div>}
     </header>

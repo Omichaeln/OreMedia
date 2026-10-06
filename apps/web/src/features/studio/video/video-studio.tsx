@@ -256,7 +256,7 @@ export function VideoStudio({ documentId, initial }: { documentId: string; initi
           the list editor, the panels and then the library. */}
       <main
         id="main"
-        className="grid min-h-0 flex-1 grid-cols-1 overflow-auto md:grid-cols-[16rem_minmax(20rem,1fr)_17rem] md:grid-rows-[minmax(0,1fr)_auto] md:overflow-hidden xl:grid-cols-[16.25rem_minmax(24rem,1fr)_19.375rem]"
+        className="grid min-h-0 flex-1 grid-cols-1 overflow-auto md:grid-cols-[12rem_minmax(18rem,1fr)_14rem] md:grid-rows-[minmax(0,1fr)_auto] md:overflow-hidden lg:grid-cols-[16rem_minmax(20rem,1fr)_17rem] xl:grid-cols-[16.25rem_minmax(24rem,1fr)_19.375rem]"
       >
         <section
           aria-labelledby="video-left-heading"
@@ -304,7 +304,7 @@ export function VideoStudio({ documentId, initial }: { documentId: string; initi
         </div>
 
         <div
-          className="order-3 flex min-h-0 min-w-0 flex-col border-t border-border bg-card md:border-l md:border-t-0"
+          className="order-3 flex min-w-0 flex-col border-t border-border bg-card md:min-h-0 md:border-l md:border-t-0"
           data-testid="video-right"
         >
           {wide && (

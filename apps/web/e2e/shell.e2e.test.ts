@@ -84,33 +84,46 @@ describe.skipIf(!enabled)('brand shell and home (built app in Chromium)', () => 
     await page.close();
   }, 45_000);
 
-  it('Studio is a sidebar section: the documents index creates a document and opens it without the sidebar, and lists it on return', async () => {
+  it('Studio is a sidebar section that opens full-screen as the interface draws it: create a document, open it, find it on return, Back to Home', async () => {
     const page = await signedIn(1440);
     const nav = page.getByRole('navigation', { name: 'Brand sections' });
     await nav.getByRole('link', { name: /^Studio/ }).click();
     await page.waitForURL('**/studio', { timeout: 15_000 });
     await expect
       .poll(() => page.getByRole('heading', { level: 1 }).textContent(), { timeout: 15_000 })
-      .toBe('Studio');
-    expect(await nav.count()).toBe(1);
-    await page.getByRole('button', { name: 'Blank canvas…' }).click();
+      .toBe('What are you making?');
+    // The interface's Studio is full-screen with its own breadcrumb bar (brand / Studio / Create), not the sidebar.
+    expect(await page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(0);
+    const crumbs = page.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(await crumbs.textContent()).toContain(`${E2E.brandName}/Studio/Create`);
+    await page.getByTestId('studio-kind').filter({ hasText: 'Still' }).click();
+    await page.getByRole('button', { name: /^Square 1080/ }).click();
+    await page
+      .getByTestId('template-gallery')
+      .getByRole('button', { name: /^Blank/ })
+      .click();
     await page.getByLabel('New document title').fill('Studio index document');
-    await page.getByRole('button', { name: 'Create and open' }).click();
+    await page.getByRole('button', { name: 'Open in canvas' }).click();
     await page.waitForURL('**/studio/*', { timeout: 15_000 });
-    await expect.poll(() => page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(0);
-    await page.goBack();
+    await expect.poll(() => page.getByTestId('document-title').textContent()).toBe('Studio index document');
+    await page.getByRole('link', { name: 'Studio' }).click();
     await page.waitForURL('**/studio', { timeout: 15_000 });
     const documents = page.getByTestId('documents');
     await documents.waitFor({ timeout: 15_000 });
-    // The creation dialog closed before the studio opened, so nothing of the index stays hidden from assistive
-    // technology (aria-hidden / inert left behind by a modal that the route change unmounted).
+    // Nothing of the index stays hidden from assistive technology (aria-hidden / inert left behind by a modal that a
+    // route change unmounted).
     expect(await documents.evaluate((el) => Boolean(el.closest('[aria-hidden="true"], [inert]')))).toBe(
       false,
     );
     await expect
-      .poll(() => documents.getByRole('link', { name: 'Studio index document' }).count(), { timeout: 15_000 })
+      .poll(() => documents.getByRole('link', { name: /Studio index document/ }).count(), { timeout: 15_000 })
       .toBe(1);
-    expect(await page.getByRole('navigation', { name: 'Brand sections' }).count()).toBe(1);
+    // Back from the create screen returns to the brand's home and its navigation.
+    await page.getByRole('link', { name: 'Back' }).click();
+    await page.waitForURL('**/home', { timeout: 15_000 });
+    await expect
+      .poll(() => page.getByRole('navigation', { name: 'Brand sections' }).count(), { timeout: 15_000 })
+      .toBe(1);
     await page.close();
   }, 45_000);
 

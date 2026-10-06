@@ -190,18 +190,16 @@ describe.skipIf(!enabled)('studio smoke (built app in Chromium)', () => {
   it('creates a document, edits text, autosaves, reloads and finds the same text (save/reopen)', async () => {
     // STU-1a: documents start on the Studio's creation screen. The mock's approved brand template is the fixture
     // document; the real API starts from a blank canvas and the fixture layers are added below.
+    // The format step at the square size: its layouts are blank, the brand's templates and the built-in starters.
     await page.goto(
-      `${origin}/c/${encodeURIComponent(session.tenantId)}/b/${encodeURIComponent(session.brandId)}/studio`,
+      `${origin}/c/${encodeURIComponent(session.tenantId)}/b/${encodeURIComponent(session.brandId)}/studio?kind=still&platform=instagram_business&format=square_1080`,
     );
-    if (realApi) await page.getByRole('button', { name: 'Blank canvas…' }).click();
-    else
-      await page
-        .getByTestId('gallery-card')
-        .filter({ hasText: 'Promo template' })
-        .getByRole('button', { name: 'Details' })
-        .click();
+    await page
+      .getByTestId('template-gallery')
+      .getByRole('button', { name: realApi ? /^Blank/ : /^Promo template/ })
+      .click();
     await page.getByLabel('New document title').fill('Smoke test document');
-    await page.getByRole('button', { name: 'Create and open' }).click();
+    await page.getByRole('button', { name: 'Open in canvas' }).click();
     await expect.poll(() => page.url(), { timeout: 15_000 }).toContain('/studio/');
     const documentId = documentIdFromUrl();
     if (realApi) {

@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from 'react';
+import { useId, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import type { ContentType, CreativeDocumentV1, FormatDefinition } from '@oremedia/contracts/creative';
 import { VIDEO_FORMATS, type VideoFormatKey } from '@oremedia/contracts/video';
@@ -141,7 +141,11 @@ function KindCard({ kind }: { kind: (typeof KINDS)[number] }) {
         {FRAMES[kind.key].map((f, i) => (
           <span
             key={i}
-            className={cn('flex items-center justify-center rounded-sm text-sm shadow-card', f.className)}
+            // The glyph is large text (22 px bold), so the accent frame's light glyph keeps 3:1 (WCAG large text).
+            className={cn(
+              'flex items-center justify-center rounded-sm text-xl font-bold shadow-card',
+              f.className,
+            )}
           >
             {f.glyph}
           </span>
@@ -455,27 +459,33 @@ function LayoutTile({
   onOpen: () => void;
   children: ReactNode;
 }) {
+  // Named by the layout's name and described by its source, not by the preview's own label that comes first.
+  const id = useId();
   return (
     <li data-testid="gallery-card">
       <button
         type="button"
+        aria-labelledby={`${id}-name`}
+        aria-describedby={`${id}-detail`}
         aria-pressed={selected}
         onClick={onSelect}
         onDoubleClick={onOpen}
-        className="group flex w-full flex-col gap-1.5 text-left focus-visible:outline-none"
+        className="flex w-full flex-col gap-1.5 rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-4 focus-visible:ring-offset-card"
       >
         <span
           className={cn(
             'flex h-[140px] items-center justify-center rounded-lg bg-background outline outline-2 outline-offset-2 transition-[outline-color]',
-            selected ? 'outline-foreground' : 'outline-transparent group-focus-visible:outline-ring',
+            selected ? 'outline-foreground' : 'outline-transparent',
           )}
         >
           {children}
         </span>
-        <span className="text-sm font-medium" data-testid="layout-name">
+        <span id={`${id}-name`} className="text-sm font-medium" data-testid="layout-name">
           {name}
         </span>
-        <span className="text-xs text-muted-foreground">{detail}</span>
+        <span id={`${id}-detail`} className="text-xs text-muted-foreground">
+          {detail}
+        </span>
       </button>
     </li>
   );
