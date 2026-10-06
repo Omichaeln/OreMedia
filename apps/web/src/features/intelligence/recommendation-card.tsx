@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { Link } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { RecommendationAction } from '@oremedia/contracts/intelligence';
-import { Badge, Button, Field, Input, Skeleton, StatusBanner, StatusDot, Textarea, cn } from '@oremedia/ui';
+import { Button, Field, Input, Skeleton, StatusBanner, Textarea, cn } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Select } from '../../components/select';
 import { denialOf, toUiError } from '../../lib/errors';
@@ -14,7 +14,15 @@ import { brandPath } from '../brand/brand-context';
 import { DesignFields } from '../experiments/design-fields';
 import { EMPTY_DESIGN, parseDesign, type DesignForm } from '../experiments/experiment-helpers';
 import { localInputToIso, isoToLocalInput } from '../publishing/publication-state';
-import { ACTION_LABEL, defaultReviewAfter, levelChip } from './intelligence-helpers';
+import {
+  ACTION_LABEL,
+  benefitText,
+  confidenceText,
+  defaultReviewAfter,
+  DISMISS_REASONS,
+  effortText,
+  rankText,
+} from './intelligence-helpers';
 import type { AcceptResultDto, RecommendationDto } from './use-intelligence';
 
 export interface RecommendationCardProps {
@@ -23,6 +31,8 @@ export interface RecommendationCardProps {
   recommendation: RecommendationDto;
   /** Rank position in the list (1-based) when the list is ranked; null when unranked. */
   position: number | null;
+  /** The statements of the insights the recommendation cites, where the workspace has them. */
+  evidence?: string[];
   /** Called once the person decided (accepted or dismissed), so the list can keep the card and its outcome. */
   onDecided?: (recommendation: RecommendationDto) => void;
   /**
@@ -61,6 +71,7 @@ export function RecommendationCard({
   brandId,
   recommendation: r,
   position,
+  evidence = [],
   onDecided,
   layout = 'card',
 }: RecommendationCardProps) {
@@ -140,10 +151,13 @@ export function RecommendationCard({
         accept.mutate(base);
     }
   };
+  const dismissWith = (text: string) => {
+    if (text.trim())
+      dismiss.mutate({ recommendationId: r.id, expectedVersion: r.version, reason: text.trim() });
+  };
   const submitDismiss = (e: FormEvent) => {
     e.preventDefault();
-    if (reason.trim())
-      dismiss.mutate({ recommendationId: r.id, expectedVersion: r.version, reason: reason.trim() });
+    dismissWith(reason);
   };
   const acceptUi = accept.isError ? toUiError(accept.error) : null;
   const acceptDenial = acceptUi ? denialOf(acceptUi) : null;
@@ -152,8 +166,6 @@ export function RecommendationCard({
     designIssues.find((i) => i.path === path)?.issue ?? fieldIssue(`experimentDesign.${path}`);
   const principal = principals.items.find((p) => p.id === principalId) ?? null;
   const principalsForbidden = principals.isError && toUiError(principals.error).kind === 'forbidden';
-  const effort = levelChip(r.effort);
-  const uncertainty = levelChip(r.uncertainty);
   const formId = `rec-${r.id}`;
   const href = accept.data ? downstreamHref(companyId, brandId, accept.data) : null;
 
@@ -164,7 +176,7 @@ export function RecommendationCard({
         'target:ring-2 target:ring-ring',
         row
           ? 'grid grid-cols-[72px_minmax(0,1fr)_auto] gap-x-3 gap-y-2 border-t border-border py-3'
-          : 'flex flex-col gap-2 rounded-md border border-border p-3',
+          : 'flex flex-col gap-2.5 rounded-xl border border-border bg-card px-5 py-[18px]',
       )}
       data-testid="recommendation"
       data-recommendation-state={accept.data?.state ?? dismiss.data?.state ?? r.state}
@@ -173,10 +185,7 @@ export function RecommendationCard({
         <>
           <span className="flex flex-col gap-0.5 text-xs">
             <span>{ACTION_LABEL[r.proposedAction]}</span>
-            <span className="flex items-center gap-1 text-muted-foreground">
-              <StatusDot tone={effort.tone} />
-              {effort.label} effort
-            </span>
+            <span className="text-muted-foreground">{effortText(r.effort)} effort</span>
           </span>
           <span className="flex min-w-0 flex-col gap-0.5">
             <span className="text-pretty text-sm font-medium">
@@ -185,10 +194,8 @@ export function RecommendationCard({
             </span>
             <span className="text-pretty text-xs text-muted-foreground">{r.rationale}</span>
             <span className="text-2xs text-muted-foreground">
-              expected {r.expectedBenefit.metricKey.replace(/_/g, ' ')} {r.expectedBenefit.direction}
-              {r.expectedBenefit.magnitude ? ` (${r.expectedBenefit.magnitude})` : ''} · {uncertainty.label}{' '}
-              uncertainty · {r.insightIds.length}{' '}
-              {r.insightIds.length === 1 ? 'piece of evidence' : 'pieces of evidence'}
+              expected {benefitText(r.expectedBenefit)} · {confidenceText(r.uncertainty)} confidence ·{' '}
+              {r.insightIds.length} {r.insightIds.length === 1 ? 'piece of evidence' : 'pieces of evidence'}
               {r.learning && ` · hypothesis: ${r.learning.hypothesis}`}
             </span>
           </span>
@@ -240,88 +247,77 @@ export function RecommendationCard({
         </>
       ) : (
         <>
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            {position !== null && <span className="font-semibold">#{position}</span>}
-            <span className="font-medium">{r.title}</span>
-            <Badge tone="neutral" glyph={false}>
-              {ACTION_LABEL[r.proposedAction]}
-            </Badge>
-          </div>
-          <p className="text-sm text-muted-foreground">{r.rationale}</p>
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
-            <dt className="text-muted-foreground">Expected benefit</dt>
-            <dd>
-              {r.expectedBenefit.metricKey} {r.expectedBenefit.direction}
-              {r.expectedBenefit.magnitude ? ` (${r.expectedBenefit.magnitude})` : ''}
-            </dd>
-            <dt className="text-muted-foreground">Effort</dt>
-            <dd>
-              <Badge tone={effort.tone}>{effort.label}</Badge>
-            </dd>
-            <dt className="text-muted-foreground">Uncertainty</dt>
-            <dd>
-              <Badge tone={uncertainty.tone}>{uncertainty.label}</Badge>
-            </dd>
-            <dt className="text-muted-foreground">Evidence</dt>
-            <dd>
-              {r.insightIds.length
-                ? r.insightIds.map((id) => (
-                    <code key={id} className="mr-1">
-                      {id}
-                    </code>
-                  ))
-                : 'none recorded'}
-            </dd>
-            {r.learning && (
+          <h3 className="text-pretty text-md font-bold">
+            {position !== null && (
               <>
-                <dt className="text-muted-foreground">Hypothesis</dt>
-                <dd>{r.learning.hypothesis}</dd>
+                <span
+                  aria-hidden="true"
+                  className="mr-2 text-xs font-normal tabular-nums text-muted-foreground"
+                >
+                  {rankText(position)}
+                </span>
+                <span className="sr-only">Rank {position}: </span>
               </>
             )}
-          </dl>
+            {r.title}
+          </h3>
+          <p className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              Benefit <span className="text-foreground">{benefitText(r.expectedBenefit)}</span>
+            </span>
+            <span>
+              Effort <span className="text-foreground">{effortText(r.effort)}</span>
+            </span>
+            <span>
+              Confidence <span className="text-foreground">{confidenceText(r.uncertainty)}</span>
+            </span>
+          </p>
+          <p className="text-pretty text-sm leading-normal text-muted-foreground">{r.rationale}</p>
+          {(evidence.length > 0 || r.learning) && (
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+              {evidence.length > 0 && <p>Evidence: {evidence.join(' · ')}</p>}
+              {r.learning && <p>Hypothesis: {r.learning.hypothesis}</p>}
+            </div>
+          )}
           {accept.data && (
-            <StatusBanner
-              tone="good"
-              title={`Accepted: ${ACTION_LABEL[accept.data.action]}`}
-              description={
+            <p role="status" className="text-xs text-muted-foreground" data-testid="recommendation-accepted">
+              <span className="text-foreground">Accepted: {ACTION_LABEL[accept.data.action]}.</span>{' '}
+              {accept.data.downstreamId ? (
                 <>
-                  {accept.data.downstreamId ? (
-                    <>
-                      Created {accept.data.downstreamType.replace(/_/g, ' ')}{' '}
-                      <code>{accept.data.downstreamId}</code> with a back-reference to this recommendation.
-                    </>
-                  ) : (
-                    <>
-                      Your decision is recorded; open the {accept.data.downstreamType.replace(/_/g, ' ')} to
-                      act on it.
-                    </>
-                  )}
+                  Created {accept.data.downstreamType.replace(/_/g, ' ')} {accept.data.downstreamId} with a
+                  back-reference to this recommendation.
                 </>
-              }
-              actions={
-                href && (
-                  <Button size="sm" asChild>
-                    <Link to={href}>Open</Link>
-                  </Button>
-                )
-              }
-              data-testid="recommendation-accepted"
-            />
+              ) : (
+                <>
+                  Your decision is recorded; open the {accept.data.downstreamType.replace(/_/g, ' ')} to act
+                  on it.
+                </>
+              )}
+              {href && (
+                <>
+                  {' '}
+                  <Link
+                    to={href}
+                    className="inline-flex min-h-6 items-center font-medium text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    Open <span aria-hidden="true">&nbsp;→</span>
+                  </Link>
+                </>
+              )}
+            </p>
           )}
           {dismiss.data && (
-            <StatusBanner
-              tone="neutral"
-              title="Dismissed"
-              description="The reason is stored with the learning record."
-            />
+            <p role="status" className="text-xs text-muted-foreground">
+              Dismissed — {dismiss.variables?.reason}. The reason is stored with the learning record.
+            </p>
           )}
           {!accept.data && !dismiss.data && r.actions.length > 0 && (
-            <div className="flex flex-wrap gap-2" role="group" aria-label={`Actions for ${r.title}`}>
+            <div className="flex flex-wrap gap-1.5 pt-0.5" role="group" aria-label={`Actions for ${r.title}`}>
               {r.actions.map((a) => (
                 <Button
                   key={a}
                   size="sm"
-                  variant={a === 'dismiss' ? 'ghost' : 'primary'}
+                  variant={a === 'dismiss' ? 'secondary' : 'primary'}
                   aria-expanded={open === a}
                   aria-controls={`${formId}-form`}
                   onClick={() => setOpen(open === a ? null : a)}
@@ -511,10 +507,23 @@ export function RecommendationCard({
           className={cn('flex flex-col gap-2 border-t border-border pt-2', row && 'col-span-full')}
           noValidate
         >
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Dismiss with a reason">
+            {DISMISS_REASONS.map((label) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => dismissWith(label)}
+                disabled={dismiss.isPending}
+                className="inline-flex h-7 items-center whitespace-nowrap rounded-full border border-border bg-card px-2.5 text-xs text-foreground hover:border-border-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <Field
             label="Reason for dismissing"
             htmlFor={`${formId}-reason`}
-            hint="Required. Stored with the learning record; it explains a preference, never how the creative would have performed."
+            hint="Pick a reason above or write your own. Stored with the learning record; it explains a preference, never how the creative would have performed."
           >
             <Textarea
               id={`${formId}-reason`}

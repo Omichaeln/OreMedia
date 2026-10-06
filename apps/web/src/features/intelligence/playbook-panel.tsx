@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { EvidenceStrength } from '@oremedia/contracts/intelligence';
-import { Badge, Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea } from '@oremedia/ui';
+import { Button, EmptyState, Field, Input, Skeleton, StatusBanner, Textarea, toneGlyph } from '@oremedia/ui';
 import { RequestError } from '../../components/request-state';
 import { Section } from '../../components/section';
 import { Select } from '../../components/select';
@@ -9,7 +9,6 @@ import { toUiError } from '../../lib/errors';
 import { mutationIntent, useIntentKey } from '../../lib/intent-key';
 import { useTRPC } from '../../lib/trpc';
 import { localInputToIso, isoToLocalInput } from '../publishing/publication-state';
-import { FreshnessLine } from './freshness-line';
 import { defaultReviewAfter, playbookStateChip, STRENGTH_CHIP } from './intelligence-helpers';
 import type { InsightDto, PlaybookEntryDto, WorkspaceDto } from './use-intelligence';
 import { useProposedPlaybook } from './use-intelligence';
@@ -26,10 +25,13 @@ function EntryRow({
   entry,
   dueForReview,
   canApprove,
+  evidence,
 }: {
   entry: PlaybookEntryDto;
   dueForReview: boolean;
   canApprove: boolean;
+  /** The cited insights' statements where the workspace has them; the rest are counted. */
+  evidence: Map<string, string>;
 }) {
   const trpc = useTRPC();
   const queryClient = useQueryClient();
@@ -46,25 +48,35 @@ function EntryRow({
   const chip = playbookStateChip(approve.data?.state ?? entry.state);
   const strength = STRENGTH_CHIP[entry.strength];
   const ui = approve.isError ? toUiError(approve.error) : null;
+  const cited = entry.evidenceIds.flatMap((id) => evidence.get(id) ?? []);
+  const uncited = entry.evidenceIds.length - cited.length;
   return (
     <li
-      className="flex flex-col gap-1 py-2"
+      className="grid gap-x-4 gap-y-1 py-3.5 text-sm sm:grid-cols-[minmax(0,1fr)_170px_130px] sm:items-center"
       data-testid="playbook-entry"
       data-playbook-state={chip.label.toLowerCase()}
     >
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Badge tone={chip.tone}>{chip.label}</Badge>
-        <Badge tone={strength.tone}>{strength.label}</Badge>
-        {dueForReview && <Badge tone="warning">Due for review</Badge>}
-      </div>
-      <p className="text-sm">{entry.practice}</p>
-      <p className="text-xs text-muted-foreground">
-        Evidence: {entry.evidenceIds.length ? entry.evidenceIds.join(', ') : 'none recorded'} · reconsider by{' '}
-        {new Date(entry.reviewAfter).toLocaleDateString()}
-        {entry.approvedByUserId ? ` · approved by ${entry.approvedByUserId}` : ''}
-      </p>
+      <span className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-base">{entry.practice}</span>
+        <span className="text-xs text-muted-foreground">
+          {chip.label}
+          {entry.state === 'proposed' && !approve.data ? ' · awaiting approval' : ''}
+          {cited.length > 0 && ` · evidence: ${cited.join(' · ')}`}
+          {uncited > 0 && ` · ${uncited} earlier insight${uncited === 1 ? '' : 's'} cited`}
+          {entry.evidenceIds.length === 0 && ' · no evidence recorded'}
+        </span>
+      </span>
+      <span className="text-muted-foreground">{strength.label}</span>
+      <span className="flex flex-col text-xs text-muted-foreground">
+        <span>Reconsider by {new Date(entry.reviewAfter).toLocaleDateString()}</span>
+        {dueForReview && (
+          <span className="text-status-warning">
+            <span className="sr-only">{toneGlyph.warning} </span>Due for review
+          </span>
+        )}
+      </span>
       {entry.state === 'proposed' && !approve.data && canApprove && (
-        <div>
+        <div className="sm:col-span-3">
           <Button
             size="sm"
             variant="primary"
@@ -76,7 +88,7 @@ function EntryRow({
         </div>
       )}
       {entry.state === 'proposed' && !canApprove && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-muted-foreground sm:col-span-3">
           Approval needs a person with playbook.approve (owner, admin or brand manager).
         </p>
       )}
@@ -86,10 +98,13 @@ function EntryRow({
           title="Permission denied"
           description={`${ui.message} Approving a playbook entry needs playbook.approve for this brand.`}
           data-testid="playbook-denied"
+          className="sm:col-span-3"
         />
       )}
       {ui && ui.kind !== 'forbidden' && (
-        <RequestError error={approve.error} title="The entry was not approved" />
+        <div className="sm:col-span-3">
+          <RequestError error={approve.error} title="The entry was not approved" />
+        </div>
       )}
     </li>
   );
@@ -132,10 +147,14 @@ export function PlaybookPanel({ brandId, view, insights, canApprove }: PlaybookP
     setEvidence((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
   const ui = propose.isError ? toUiError(propose.error) : null;
   const due = new Set(view.dueForReview);
+  const statements = new Map(insights.map((i) => [i.id, i.statement]));
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
+      <p className="text-sm text-muted-foreground">
+        Approved practices. Engagement gains never rewrite brand standards — entries need a person with
+        playbook.approve.
+      </p>
       <Section id="playbook-approved-heading" title="Approved practices" testId="playbook-approved">
-        <FreshnessLine freshness={view.freshness} statement={view.statement} />
         {view.items.length === 0 ? (
           <EmptyState
             title="No approved practices yet"
@@ -144,7 +163,13 @@ export function PlaybookPanel({ brandId, view, insights, canApprove }: PlaybookP
         ) : (
           <ul className="divide-y divide-border" aria-label="Approved practices">
             {view.items.map((p) => (
-              <EntryRow key={p.id} entry={p} dueForReview={due.has(p.id)} canApprove={canApprove} />
+              <EntryRow
+                key={p.id}
+                entry={p}
+                dueForReview={due.has(p.id)}
+                canApprove={canApprove}
+                evidence={statements}
+              />
             ))}
           </ul>
         )}
@@ -161,7 +186,13 @@ export function PlaybookPanel({ brandId, view, insights, canApprove }: PlaybookP
         {proposed.data && proposed.data.items.length > 0 && (
           <ul className="divide-y divide-border" aria-label="Proposed practices">
             {proposed.data.items.map((p) => (
-              <EntryRow key={p.id} entry={p} dueForReview={false} canApprove={canApprove} />
+              <EntryRow
+                key={p.id}
+                entry={p}
+                dueForReview={false}
+                canApprove={canApprove}
+                evidence={statements}
+              />
             ))}
           </ul>
         )}
