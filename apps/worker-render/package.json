@@ -27,7 +27,7 @@
     "@temporalio/client": "^1.24.0",
     "@temporalio/worker": "^1.24.0",
     "playwright": "1.56.1",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "unpdf": "1.8.1",
     "zod": "^3.25.76"
   },
