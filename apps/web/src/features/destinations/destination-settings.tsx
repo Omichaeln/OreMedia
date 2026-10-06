@@ -32,6 +32,7 @@ import {
   callbackError,
   callbackParams,
   connectRedirectUri,
+  connectReturnTab,
   rememberConnect,
   unavailableReason,
 } from '../publishing/channel-connect';
@@ -1223,8 +1224,10 @@ export function DestinationSettings({
   const destinations = useDestinations(brandId);
   const policies = useSourceUsePolicies(brandId);
   const [params, setParams] = useSearchParams();
-  const callback = callbackParams(params.toString());
-  const providerError = callbackError(params.toString());
+  // Only a return marked as a destination's (connectReturnTab) is finished here; a channel's is the channel list's.
+  const ownReturn = params.get('tab') === connectReturnTab('destination');
+  const callback = ownReturn ? callbackParams(params.toString()) : null;
+  const providerError = ownReturn ? callbackError(params.toString()) : null;
   // The vendor's answer is read from the query; dismissing it keeps this tab open.
   const clearCallback = () => setParams({ tab: 'destinations' }, { replace: true });
   const listUi = destinations.isError ? toUiError(destinations.error) : null;

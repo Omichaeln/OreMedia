@@ -97,6 +97,28 @@ export function briefGaps(b: {
 export const isSuggested = (b: { createdByKind: string; recommendationId: string | null; state: string }) =>
   b.state === 'draft' && (b.createdByKind !== 'user' || b.recommendationId !== null);
 
+/**
+ * The one state line a brief row shows (the interface's dot and text): the brief's state, then what else the
+ * planner needs to know ("Suggested plan", "Incomplete"); the dot takes the warning tone while the brief has gaps.
+ */
+export function briefRowState(b: {
+  state: string;
+  createdByKind: string;
+  recommendationId: string | null;
+  audience: string;
+  message: string;
+  channelConnectionIds: readonly string[];
+}): Chip {
+  const chip = briefChip(b.state);
+  const gaps = briefGaps(b);
+  const parts = [
+    chip.label,
+    ...(isSuggested(b) ? ['Suggested plan'] : []),
+    ...(gaps.length ? ['Incomplete'] : []),
+  ];
+  return { tone: gaps.length ? 'warning' : chip.tone, label: parts.join(' · ') };
+}
+
 /** Spec 21.2 "missed date": a campaign still open (draft or active) after its end date. */
 export const missedDate = (c: { endsAt: string; state: string }, now = new Date()): boolean =>
   (c.state === 'draft' || c.state === 'active') && new Date(c.endsAt).getTime() < now.getTime();
@@ -120,6 +142,10 @@ export function variantFindings(validation: unknown): ValidationFindings {
     : [];
   return { ok: v.ok === true, issues };
 }
+
+/** What a variant row says beside its channel: "Valid", or the first finding the capability check recorded. */
+export const variantStatusText = (findings: ValidationFindings): string =>
+  findings.ok ? 'Valid' : (findings.issues[0]?.issue ?? 'Invalid');
 
 /** Whether two id selections are the same set (order and repeats aside): an unchanged selection is not sent. */
 export const sameIdSet = (a: readonly string[], b: readonly string[]): boolean => {

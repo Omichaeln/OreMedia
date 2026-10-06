@@ -436,6 +436,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
         path: () => brandPath('settings'),
         ready: (p) => p.getByTestId(`channel-${P5.channels.ok}`).waitFor({ timeout: 15_000 }),
       });
+      await page.getByTestId(`channel-${P5.channels.ok}`).getByRole('button', { name: 'Manage' }).click();
       await page.getByTestId(`channel-${P5.channels.ok}`).getByRole('button', { name: 'Disconnect' }).focus();
       await page.keyboard.press('Enter');
       await page.getByRole('alertdialog').waitFor();

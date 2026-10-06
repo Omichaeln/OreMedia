@@ -4,6 +4,7 @@ import type {
   FrozenManifestV1,
   InboxAttention,
   ManifestChange,
+  ReviewDecisionKind,
   ReviewRequestState,
   StaleReason,
 } from '@oremedia/contracts/review';
@@ -39,7 +40,7 @@ export const ATTENTION_CHIP: Record<InboxAttention, AttentionChip> = {
   },
   external_access_revoked: {
     tone: 'neutral',
-    label: 'External access revoked',
+    label: 'External link revoked',
     detail: 'At least one external reviewer link was revoked.',
   },
 };
@@ -187,3 +188,147 @@ export function parsePortalFragment(hash: string): PortalLink | null {
   const exp = params.get('exp');
   return { reviewRequestId, token, expiresAt: exp && !Number.isNaN(new Date(exp).getTime()) ? exp : null };
 }
+
+// ---- The interface's forms (interface-integration programme): what a row, a header and a reviewer list say ----
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "23 Sep" as the interface writes dates (the locale's own short month varies: "Sept"), the year only when it is not this year. */
+export const shortDate = (iso: string, now = new Date()): string => {
+  const d = new Date(iso);
+  const dayMonth = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+  return d.getFullYear() === now.getFullYear() ? dayMonth : `${dayMonth} ${d.getFullYear()}`;
+};
+
+/** The inbox row's due text as the interface sets it: "due today", otherwise "due 28 Sep". */
+export const dueText = (iso: string, now = new Date()): string =>
+  new Date(iso).toDateString() === now.toDateString() ? 'due today' : `due ${shortDate(iso, now)}`;
+
+/** Flags that say what the request is (the dot and the label); the rest are secondary flags after a separator. */
+const STATE_FLAGS: ReadonlySet<InboxAttention> = new Set([
+  'approval_invalidated',
+  'stale',
+  'changes_requested',
+  'awaiting_decision',
+  'approved',
+]);
+
+export interface InboxRowState {
+  tone: Tone;
+  label: string;
+  detail: string;
+  /** Secondary flags ("External link revoked"), shown after the state in the accent colour. */
+  flags: AttentionChip[];
+}
+
+/**
+ * One state per row, the way the interface lists requests: the dot and the state label first (the most urgent
+ * attention flag, or the request's own state when nothing needs attention), then any further flag after a dot.
+ */
+export function inboxRowState(item: {
+  state: ReviewRequestState;
+  attention: readonly InboxAttention[];
+}): InboxRowState {
+  const ordered = orderAttention(item.attention);
+  const primary = ordered.find((f) => STATE_FLAGS.has(f));
+  const head = primary ? ATTENTION_CHIP[primary] : REQUEST_STATE_CHIP[item.state];
+  return { ...head, flags: ordered.filter((f) => f !== primary).map((f) => ATTENTION_CHIP[f]) };
+}
+
+/** The request header's state pill: what the request is now, in the interface's words. */
+export function requestHeadline(r: {
+  state: ReviewRequestState;
+  revisionState: string;
+  approvals: ReadonlyArray<{ state: string }>;
+}): AttentionChip {
+  if (r.state === 'open') return ATTENTION_CHIP.awaiting_decision;
+  if (r.state !== 'decided') return REQUEST_STATE_CHIP[r.state];
+  if (r.approvals.some((a) => a.state === 'valid')) return ATTENTION_CHIP.approved;
+  if (r.approvals.some((a) => a.state === 'invalidated')) return ATTENTION_CHIP.approval_invalidated;
+  if (r.revisionState === 'changes_requested') return ATTENTION_CHIP.changes_requested;
+  return REQUEST_STATE_CHIP.decided;
+}
+
+export const DECISION_LABEL: Record<ReviewDecisionKind, string> = {
+  approve: 'Approved',
+  request_changes: 'Changes requested',
+  reject: 'Rejected',
+};
+
+export interface ReviewerRow {
+  key: string;
+  /** The person: a member's name (their id until the members list names them) or an external reviewer's email. */
+  who: string;
+  kind: 'Team' | 'External';
+  /** What they decided, "Pending" while the request waits on them, or why they no longer can. */
+  decision: string;
+}
+
+interface ReviewerSource {
+  state: ReviewRequestState;
+  assignees: readonly string[];
+  decisions: ReadonlyArray<{
+    deciderKind: string;
+    deciderId: string;
+    decision: ReviewDecisionKind;
+    verifiedEmail: string | null;
+  }>;
+  externalLinks: ReadonlyArray<{ id: string; email: string; revokedAt: string | null; expiresAt: string }>;
+}
+
+/**
+ * The interface's REVIEWERS list from the request's assignees, deciders and external links: every person once,
+ * members before external reviewers, each with the decision they recorded or "Pending".
+ */
+export function reviewerRows(
+  r: ReviewerSource,
+  memberName: (userId: string) => string,
+  now = new Date(),
+): ReviewerRow[] {
+  const pending = r.state === 'open' ? 'Pending' : '—';
+  const members = new Map<string, string>();
+  for (const id of r.assignees) members.set(id, pending);
+  for (const d of r.decisions)
+    if (d.deciderKind !== 'external_reviewer') members.set(d.deciderId, DECISION_LABEL[d.decision]);
+  const external = new Map<string, string>();
+  for (const l of r.externalLinks) {
+    if (external.has(l.email)) continue;
+    const decided = r.decisions.find(
+      (d) => d.deciderKind === 'external_reviewer' && d.verifiedEmail === l.email,
+    );
+    external.set(
+      l.email,
+      decided
+        ? DECISION_LABEL[decided.decision]
+        : l.revokedAt
+          ? 'Link revoked'
+          : new Date(l.expiresAt).getTime() < now.getTime()
+            ? 'Link expired'
+            : pending,
+    );
+  }
+  return [
+    ...[...members].map(([id, decision]) => ({
+      key: `member:${id}`,
+      who: memberName(id),
+      kind: 'Team' as const,
+      decision,
+    })),
+    ...[...external].map(([email, decision]) => ({
+      key: `external:${email}`,
+      who: email,
+      kind: 'External' as const,
+      decision,
+    })),
+  ];
+}
+
+/**
+ * A comment is outdated when the manifest it was made on is not the one that would publish now: the request went
+ * stale, the package changed since the freeze, or the comment names another manifest hash.
+ */
+export const commentOutdated = (
+  comment: { manifestHash: string },
+  r: { manifestHash: string; state: ReviewRequestState; changedSinceFreeze: readonly unknown[] },
+): boolean =>
+  comment.manifestHash !== r.manifestHash || r.state === 'stale' || r.changedSinceFreeze.length > 0;
