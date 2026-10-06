@@ -37,11 +37,11 @@ function Compare({
   return (
     <section
       aria-labelledby={`compare-${entry.versionId}`}
-      className="flex flex-col gap-3 rounded-md border border-border p-3"
+      className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4"
       data-testid="history-compare"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 id={`compare-${entry.versionId}`} className="text-sm font-semibold">
+        <h3 id={`compare-${entry.versionId}`} className="text-base font-bold">
           From the state of {when(entry.appliedAt)} to the brand system now
         </h3>
         {canRestore && !entry.current && (
@@ -124,11 +124,11 @@ export function BrandHistory({
   const restoreError = restore.error ? toUiError(restore.error) : null;
   return (
     <div className="flex flex-col gap-4" data-testid="brand-history">
-      <ol className="flex flex-col divide-y divide-border rounded-md border border-border">
+      <ol className="flex flex-col">
         {history.data.items.map((h) => (
           <li
             key={h.versionId}
-            className="flex flex-wrap items-center justify-between gap-2 px-3 py-2"
+            className="flex flex-wrap items-center justify-between gap-2 border-t border-border py-3.5"
             data-testid="history-entry"
           >
             <div className="min-w-0">
