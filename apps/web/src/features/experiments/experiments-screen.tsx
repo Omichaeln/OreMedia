@@ -1,25 +1,25 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router';
-import { Badge, Button, EmptyState, Skeleton } from '@oremedia/ui';
-import { AddToggle, ColumnHeader, listButton } from '../../components/column-header';
+import { Button, EmptyState, Skeleton, StatusDot, cn, toneGlyph } from '@oremedia/ui';
 import { LoadMore } from '../../components/load-more';
 import { RequestError } from '../../components/request-state';
 import { toUiError } from '../../lib/errors';
 import { useBrandContext } from '../brand/brand-context';
 import { CreateExperimentForm } from './create-experiment-form';
 import { ExperimentDetail } from './experiment-detail';
-import { DIRECTIONAL_LABEL, experimentStateChip, modeLabel } from './experiment-helpers';
+import { experimentStateChip, modeLabel, variantsLine } from './experiment-helpers';
 import { useExperiments } from './use-experiments';
 
 const EXPERIMENT_PARAM = 'experiment';
 
 /**
- * Spec 21.1 `experiments/`: the brand's experiments with their state and mode (always labelled, spec 16.6) in a list
- * column, and the selected experiment's frozen design, lifecycle and results beside it (the v3 prototype's layout).
- * "+" opens the design form in place of the detail. The selection is in the URL.
+ * Spec 21.1 `experiments/`: as the interface lays it out, a column of the brand's experiments (name, the arms
+ * compared, state and mode as a dot and words, spec 16.6) beside the selected experiment, from 768 px; stacked
+ * below it (D-31). The selection is in the URL; without one the newest experiment is shown, as the interface opens
+ * on one. "New" opens the design form in place of the detail.
  */
 export function ExperimentsScreen() {
-  const { brandId, brand } = useBrandContext();
+  const { brandId } = useBrandContext();
   const [params, setParams] = useSearchParams();
   const selectedId = params.get(EXPERIMENT_PARAM);
   const list = useExperiments(brandId);
@@ -29,32 +29,35 @@ export function ExperimentsScreen() {
     setParams({ [EXPERIMENT_PARAM]: id }, { replace: true });
   };
   const forbidden = list.isError && toUiError(list.error).kind === 'forbidden';
+  const shownId = selectedId ?? list.items[0]?.id ?? null;
 
   return (
-    <main id="main" className="flex min-h-full flex-col lg:flex-row">
+    <main
+      id="main"
+      className="om-in grid min-h-full md:h-full md:grid-cols-[minmax(260px,320px)_minmax(0,1fr)]"
+    >
       <section
         aria-labelledby="experiments-title"
-        className="flex shrink-0 flex-col border-border lg:w-80 lg:border-r"
+        className="flex min-h-0 flex-col border-border md:overflow-auto md:border-r"
         data-testid="experiments"
       >
-        <ColumnHeader
-          id="experiments-title"
-          title="Experiments"
-          level={1}
-          subtitle={`Pre-registered tests for ${brand.name}. Structured comparisons are directional; not causal. No result is declared before the pre-registered sample and window.`}
-          action={
-            !forbidden && (
-              <AddToggle open={creating} label="New experiment" onToggle={() => setCreating(!creating)} />
-            )
-          }
-        />
+        <div className="flex items-center justify-between gap-2 px-5 pb-4 pt-7">
+          <h1 id="experiments-title" className="text-xl font-bold tracking-title">
+            Experiments
+          </h1>
+          {!forbidden && (
+            <Button size="sm" aria-expanded={creating} onClick={() => setCreating(!creating)}>
+              New<span className="sr-only"> experiment</span>
+            </Button>
+          )}
+        </div>
         {list.isPending && (
-          <div className="p-4">
+          <div className="px-5 py-4">
             <Skeleton label="Loading experiments" lines={3} />
           </div>
         )}
         {list.isError && (
-          <div className="p-4">
+          <div className="px-5 py-3">
             <RequestError
               error={list.error}
               onRetry={() => void list.refetch()}
@@ -63,33 +66,33 @@ export function ExperimentsScreen() {
           </div>
         )}
         {list.isSuccess && list.items.length === 0 && (
-          <p className="px-4 py-3 text-sm text-muted-foreground">
-            No experiments yet. Design one with +, or accept a recommendation that prepares a test.
+          <p className="border-t border-border px-5 py-3.5 text-sm text-muted-foreground">
+            No experiments yet. Design one with New, or accept a recommendation that prepares a test.
           </p>
         )}
         {list.isSuccess && list.items.length > 0 && (
-          <ul className="flex flex-col divide-y divide-border" aria-label="Experiments">
+          <ul className="flex flex-col" aria-label="Experiments">
             {list.items.map((x) => {
               const chip = experimentStateChip(x.state);
-              const selected = x.id === selectedId && !creating;
+              const selected = x.id === shownId && !creating;
               return (
-                <li key={x.id}>
+                <li key={x.id} className="border-t border-border">
                   <button
                     type="button"
                     aria-pressed={selected}
                     onClick={() => select(x.id)}
                     data-testid={`experiment-${x.id}`}
-                    className={listButton(selected)}
+                    className={cn(
+                      'flex w-full flex-col gap-1.5 px-5 py-3.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                      selected ? 'bg-secondary' : 'hover:bg-muted',
+                    )}
                   >
-                    <span className="font-medium">{x.hypothesis}</span>
-                    <span className="flex flex-wrap items-center gap-2">
-                      <Badge tone={chip.tone}>{chip.label}</Badge>
-                      <Badge tone="neutral" glyph={false}>
-                        {modeLabel(x.mode)}
-                      </Badge>
-                      {x.conclusionLabel === DIRECTIONAL_LABEL && (
-                        <span className="text-xs text-muted-foreground">{DIRECTIONAL_LABEL}</span>
-                      )}
+                    <span className="text-base font-bold">{x.hypothesis}</span>
+                    <span className="text-xs text-muted-foreground">{variantsLine(x.variants)}</span>
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <StatusDot tone={chip.tone} size="sm" />
+                      <span className="sr-only">{toneGlyph[chip.tone]} </span>
+                      {chip.label} · {modeLabel(x.mode)}
                     </span>
                   </button>
                 </li>
@@ -104,25 +107,29 @@ export function ExperimentsScreen() {
             isFetchingNextPage={list.isFetchingNextPage}
             onLoadMore={() => void list.fetchNextPage()}
             noun={list.items.length === 1 ? 'experiment' : 'experiments'}
-            className="border-t border-border px-4 py-2"
+            className="border-t border-border px-5 py-3"
           />
         )}
-        <div className="mt-auto border-t border-border px-4 py-3">
+        <div className="mt-auto border-t border-border px-5 py-3">
           <Button size="sm" variant="ghost" onClick={() => void list.refetch()} disabled={list.isFetching}>
             {list.isFetching ? 'Refreshing…' : 'Refresh'}
           </Button>
         </div>
       </section>
-      <div className="min-w-0 flex-1 border-t border-border p-4 sm:p-6 lg:border-t-0">
+      <div className="min-h-0 min-w-0 border-t border-border md:overflow-auto md:border-t-0">
         {creating ? (
-          <CreateExperimentForm brandId={brandId} onCreated={select} />
-        ) : selectedId ? (
-          <ExperimentDetail key={selectedId} experimentId={selectedId} />
-        ) : (
-          <EmptyState
-            title="No experiment selected"
-            description="Choose an experiment to see its frozen design, lifecycle and results, or design one with +."
-          />
+          <div className="om-in max-w-[760px] px-5 py-6 sm:px-9 sm:py-8">
+            <CreateExperimentForm brandId={brandId} onCreated={select} />
+          </div>
+        ) : shownId ? (
+          <ExperimentDetail key={shownId} experimentId={shownId} />
+        ) : list.isPending ? null : (
+          <div className="px-5 py-6 sm:px-9 sm:py-8">
+            <EmptyState
+              title="No experiment selected"
+              description="Choose an experiment to see its frozen design, lifecycle and results, or design one with New."
+            />
+          </div>
         )}
       </div>
     </main>

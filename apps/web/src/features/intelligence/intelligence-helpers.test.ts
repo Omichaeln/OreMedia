@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  anomalyText,
+  benefitText,
+  confidenceText,
+  coverageDetail,
+  rankText,
+  workspaceExperimentChip,
   ageText,
   canApprovePlaybook,
   coverageText,
@@ -7,7 +13,7 @@ import {
   freshnessText,
   hasCoverageGaps,
   insightLabel,
-  levelChip,
+  effortText,
 } from './intelligence-helpers';
 
 describe('freshnessText', () => {
@@ -71,13 +77,49 @@ describe('canApprovePlaybook', () => {
   });
 });
 
-describe('levelChip and defaultReviewAfter', () => {
-  it('shows unknown levels as text', () => {
-    expect(levelChip('high').label).toBe('high');
-    expect(levelChip('odd')).toEqual({ tone: 'neutral', label: 'odd' });
+describe('effortText and defaultReviewAfter', () => {
+  it('shows levels, unknown ones too, as text', () => {
+    expect(effortText('high')).toBe('High');
+    expect(effortText('odd')).toBe('Odd');
   });
   it('defaults the review date to 90 days ahead', () => {
     const now = new Date('2026-01-01T00:00:00.000Z');
     expect(defaultReviewAfter(now)).toBe('2026-04-01T00:00:00.000Z');
+  });
+});
+
+describe('interface lines for the workspace', () => {
+  it('ranks as two digits and reads confidence as the inverse of the recorded uncertainty', () => {
+    expect(rankText(1)).toBe('01');
+    expect(rankText(12)).toBe('12');
+    expect(confidenceText('low')).toBe('High');
+    expect(confidenceText('high')).toBe('Low');
+    expect(confidenceText('odd')).toBe('unknown (odd)');
+  });
+  it('states the benefit, the anomaly and the coverage without a label prefix', () => {
+    expect(benefitText({ metricKey: 'qualified_enquiries', direction: 'up', magnitude: '+10%' })).toBe(
+      'qualified enquiries up (+10%)',
+    );
+    expect(anomalyText({ signal: 'complaints', baseline: 2, observed: 9 })).toBe(
+      'complaints: observed 9 against a baseline of 2 (4.5× baseline)',
+    );
+    expect(anomalyText({ signal: 'x', baseline: 0, observed: 3 })).toBe(
+      'x: observed 3 against a baseline of 0',
+    );
+    const detail = coverageDetail({
+      sources: [],
+      competitors: [],
+      languages: [],
+      periodStart: '2026-09-01T00:00:00.000Z',
+      periodEnd: '2026-09-08T00:00:00.000Z',
+    });
+    expect(detail.startsWith('Coverage')).toBe(false);
+    expect(detail).toContain('no sources yet');
+  });
+  it('shows an experiment by its verdict once it has a result, otherwise by its state', () => {
+    expect(workspaceExperimentChip({ state: 'analysed', latestResult: { verdict: 'supported' } }).label).toBe(
+      'Supported',
+    );
+    expect(workspaceExperimentChip({ state: 'running', latestResult: null }).label).toBe('Running');
   });
 });
