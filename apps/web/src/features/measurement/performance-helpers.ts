@@ -179,3 +179,60 @@ export function slotCells(posts: SlotPost[], timeZone: string): SlotCell[] {
     }
   return cells;
 }
+
+// ---- the interface's content table, freshness line, slot note and creative lift ----
+
+/** The median of the numbers given (null when there are none); a missing number is left out, never a zero. */
+export function median(xs: number[]): number | null {
+  if (xs.length === 0) return null;
+  const sorted = [...xs].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  const upper = sorted[mid] ?? 0;
+  return sorted.length % 2 ? upper : ((sorted[mid - 1] ?? upper) + upper) / 2;
+}
+
+/** A relative change against a reference: null when either side is missing or the reference is not positive. */
+export const liftOf = (value: number | null, reference: number | null): number | null =>
+  value === null || reference === null || reference <= 0 ? null : (value - reference) / reference;
+
+/** A signed percentage with a true minus sign: "+24%", "−5%", "+0%". */
+export const signedPercent = (change: number, digits = 0): string =>
+  `${change < 0 ? '−' : '+'}${Math.abs(change * 100).toFixed(digits)}%`;
+
+export interface ChannelFreshness {
+  channelConnectionId: string;
+  /** The oldest fetch among the channel's values: how old the channel's numbers can be. */
+  ageHours: number;
+  stale: boolean;
+}
+
+/**
+ * The freshness line: per channel, the oldest fetch among the values its publications returned, stale when any is.
+ * A channel whose publications returned nothing is left out (the coverage line says what has numbers).
+ */
+export function channelFreshness(
+  values: ReadonlyArray<Pick<MetricValueDto, 'subjectId' | 'value' | 'freshness'>>,
+  publications: ReadonlyArray<{ publicationId: string; channelConnectionId: string | null }>,
+): ChannelFreshness[] {
+  const channelOf = new Map(publications.map((p) => [p.publicationId, p.channelConnectionId]));
+  const byChannel = new Map<string, ChannelFreshness>();
+  for (const v of values) {
+    const channel = channelOf.get(v.subjectId);
+    if (!channel || v.value === null) continue;
+    const seen = byChannel.get(channel);
+    byChannel.set(channel, {
+      channelConnectionId: channel,
+      ageHours: Math.max(seen?.ageHours ?? 0, v.freshness.ageHours),
+      stale: (seen?.stale ?? false) || v.freshness.stale,
+    });
+  }
+  return [...byChannel.values()].sort((a, b) => a.ageHours - b.ageHours);
+}
+
+/** The slot with the highest rate among those with the minimum sample (D-14); null when no slot has it. */
+export function bestSlot(cells: SlotCell[], minimum: number): SlotCell | null {
+  let best: SlotCell | null = null;
+  for (const c of cells)
+    if (c.rate !== null && c.measured >= minimum && (best === null || c.rate > (best.rate ?? 0))) best = c;
+  return best;
+}
