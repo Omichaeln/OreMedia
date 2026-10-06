@@ -87,6 +87,8 @@ describe.skipIf(!enabled)('reports (built app in Chromium, mock transport)', () 
   it('Reports is in the brand navigation after Performance; the Recent list names brand, month and state', async () => {
     await page.goto(`${origin}${brandPath('home')}`);
     const nav = page.getByRole('navigation', { name: 'Brand sections' });
+    // Read the links once the navigation has rendered: right after load the list can still be empty.
+    await nav.getByRole('link', { name: /^Reports/ }).waitFor({ timeout: 15_000 });
     const labels = await nav.getByRole('link').allTextContents();
     const perf = labels.findIndex((l) => l.startsWith('Performance'));
     expect(labels[perf + 1]).toMatch(/^Reports/);
