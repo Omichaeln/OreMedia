@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { closeDatabase, configureDatabase, type Db } from '../client';
 import { migrationsFolder, runMigrations } from '../migrate';
-import { generateRetentionRoleSql, generateRoleSql } from '../roles';
+import { generateDeletionRoleSql, generateRetentionRoleSql, generateRoleSql } from '../roles';
 
 export interface TestDatabase {
   db: Db;
@@ -89,16 +89,21 @@ async function startContainer(): Promise<string> {
 }
 
 /**
- * A MySQL user on this test database with a generated role's grants (roles/app-role.sql or retention-role.sql),
- * for tests that prove what the engine allows each role. Returns the user's connection URL; drop() removes it.
+ * A MySQL user on this test database with a generated role's grants (roles/app-role.sql, retention-role.sql or
+ * deletion-role.sql), for tests that prove what the engine allows each role. Returns the user's connection URL; drop() removes it.
  */
 export async function createRoleUser(
   tdb: Pick<TestDatabase, 'adminUrl' | 'name'>,
-  role: 'app' | 'retention',
+  role: 'app' | 'retention' | 'deletion',
 ): Promise<{ url: string; user: string; drop(): Promise<void> }> {
-  const user = `oremedia_${role === 'app' ? 'app' : 'ret'}_${randomBytes(4).toString('hex')}`;
+  const user = `oremedia_${{ app: 'app', retention: 'ret', deletion: 'del' }[role]}_${randomBytes(4).toString('hex')}`;
   const password = randomBytes(12).toString('hex');
-  const sql = (role === 'app' ? generateRoleSql : generateRetentionRoleSql)(tdb.name, user, '%').replace(
+  const generate = {
+    app: generateRoleSql,
+    retention: generateRetentionRoleSql,
+    deletion: generateDeletionRoleSql,
+  }[role];
+  const sql = generate(tdb.name, user, '%').replace(
     `CREATE USER IF NOT EXISTS '${user}'@'%';`,
     `CREATE USER IF NOT EXISTS '${user}'@'%' IDENTIFIED WITH mysql_native_password BY '${password}';`,
   );

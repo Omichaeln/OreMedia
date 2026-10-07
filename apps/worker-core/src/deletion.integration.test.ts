@@ -1,13 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { and, eq, getTableColumns, getTableName, sql } from 'drizzle-orm';
-import { getTableConfig, type MySqlColumn, type MySqlTable } from 'drizzle-orm/mysql-core';
-import {
-  purgeOrder,
-  runInTenant,
-  tenantScopedTables,
-  withTransaction,
-  type TenantContext,
-} from '@oremedia/db';
+import { type MySqlColumn } from 'drizzle-orm/mysql-core';
+import { runInTenant, tenantScopedTables, withTransaction, type TenantContext } from '@oremedia/db';
 import { tenants, users } from '@oremedia/db/schema/access';
 import { agentRuns, agentSteps } from '@oremedia/db/schema/agents';
 import { assetDerivatives, assetVersions, uploadIntents } from '@oremedia/db/schema/assets';
@@ -28,7 +22,13 @@ import {
 import type { DeletionWorkflowInputV1 } from '@oremedia/contracts/operations';
 import { runDeletionRequest } from '@oremedia/workflows/deletion-request.workflow.v1';
 import { runRetentionSweep } from '@oremedia/workflows/retention-sweep.workflow.v1';
-import { callPath, seedTwoTenants, type SeededTenant } from '../../../tooling/test-fixtures/src/seed';
+import {
+  callPath,
+  fillEmptyTables,
+  rid,
+  seedTwoTenants,
+  type SeededTenant,
+} from '../../../tooling/test-fixtures/src/seed';
 import { composeModules } from './composition';
 import { RETAINED_ON_DELETION, deletionCoverage } from './deletion-handlers';
 
@@ -42,85 +42,9 @@ import { RETAINED_ON_DELETION, deletionCoverage } from './deletion-handlers';
  * run changes nothing. A brand deletion narrows to one brand; the retention sweep counts in a dry run and removes
  * only rows past their TTL.
  */
-const ULID = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-const rid = (prefix: string) =>
-  `${prefix}_${Array.from({ length: 26 }, () => ULID[Math.floor(Math.random() * 32)]).join('')}`;
-
 type Counts = Record<string, number>;
 const countsOf = async (t: SeededTenant): Promise<Counts> =>
   (JSON.parse(await t.snapshot()) as { counts: Counts }).counts;
-
-/**
- * A minimal valid row for any tenant-scoped table: required columns filled by type, tenant and brand set, and
- * every foreign key pointed at an existing parent row of the same tenant (parents are filled first; a user is the
- * tenant's owner).
- */
-async function fillEmptyTables(tdb: TestDatabase, t: SeededTenant): Promise<string[]> {
-  const filled: string[] = [];
-  const tables = purgeOrder(tenantScopedTables()).reverse(); // parents before children
-  for (const table of tables) {
-    const name = getTableName(table);
-    const cols = Object.values(getTableColumns(table)) as MySqlColumn[];
-    const tenantCol = cols.find((c) => c.name === 'tenant_id')!;
-    const [{ n } = { n: 0 }] = await tdb.db
-      .select({ n: sql<number>`count(*)` })
-      .from(table)
-      .where(eq(tenantCol, t.tenantId));
-    if (Number(n) > 0) continue;
-    const row: Record<string, unknown> = {};
-    for (const c of cols) {
-      const key = Object.entries(getTableColumns(table)).find(([, v]) => v === c)![0];
-      if (c.name === 'tenant_id') row[key] = t.tenantId;
-      else if (c.name === 'brand_id') row[key] = t.brandIds[0];
-      else if (c.name === 'id') row[key] = rid(name.slice(0, 3));
-      else if (!c.notNull || c.hasDefault) continue;
-      else {
-        const values = (c as unknown as { enumValues?: string[] }).enumValues;
-        if (values?.length) row[key] = values[0];
-        else if (c.dataType === 'number' || c.dataType === 'bigint') row[key] = 0;
-        else if (c.dataType === 'boolean') row[key] = false;
-        else if (c.dataType === 'date') row[key] = new Date();
-        else if (c.dataType === 'json') row[key] = {};
-        else row[key] = `x${Math.random().toString(36).slice(2, 10)}`;
-      }
-    }
-    for (const fk of getTableConfig(table).foreignKeys) {
-      const ref = fk.reference();
-      const parent = ref.foreignTable as MySqlTable;
-      const parentCols = Object.values(getTableColumns(parent)) as MySqlColumn[];
-      const parentTenant = parentCols.find((c) => c.name === 'tenant_id');
-      const parentBrand = parentCols.find((c) => c.name === 'brand_id');
-      // The parent in the same tenant and, where the key carries the brand, the same brand (brand 1).
-      const brandAt = ref.columns.findIndex((c) => c.name === 'brand_id');
-      const brandKey = brandAt >= 0 ? ref.foreignColumns[brandAt] : parentBrand;
-      // A global parent is the tenant row itself, or (users) the tenant's owner.
-      const globalParentId = getTableName(parent) === 'users' ? t.ownerUserId : t.tenantId;
-      const where = [
-        parentTenant
-          ? eq(parentTenant, t.tenantId)
-          : eq(
-              parentCols.find((c) => c.name === 'id')!,
-              globalParentId,
-            ),
-        ...(brandKey ? [eq(brandKey, t.brandIds[0])] : []),
-      ];
-      const [p] = await tdb.db
-        .select()
-        .from(parent)
-        .where(and(...where))
-        .limit(1);
-      if (!p) throw new Error(`no ${getTableName(parent)} row of the tenant for ${name}`);
-      ref.columns.forEach((c, i) => {
-        const key = Object.entries(getTableColumns(table)).find(([, v]) => v === c)![0];
-        const pKey = Object.entries(getTableColumns(parent)).find(([, v]) => v === ref.foreignColumns[i])![0];
-        row[key] = (p as Record<string, unknown>)[pKey];
-      });
-    }
-    await tdb.db.insert(table).values(row as never);
-    filled.push(name);
-  }
-  return filled;
-}
 
 describe('deletion and retention fan-out end to end (spec 17.5, ledger 7.16)', () => {
   let tdb: TestDatabase;
@@ -159,7 +83,7 @@ describe('deletion and retention fan-out end to end (spec 17.5, ledger 7.16)', (
     ({ tenantA, tenantB } = await seedTwoTenants(tdb.db));
     composeModules(); // the worker's composition root: routes and every deletion / retention handler
     configureStorage(mem);
-    for (const t of [tenantA, tenantB]) await fillEmptyTables(tdb, t);
+    for (const t of [tenantA, tenantB]) await fillEmptyTables(tdb.db, t);
     // Storage keys of the generic rows are not tenant-prefixed; give A's and B's export rows real keys and objects.
     for (const t of [tenantA, tenantB]) {
       await tdb.db

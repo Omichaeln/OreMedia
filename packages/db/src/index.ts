@@ -27,6 +27,7 @@ export {
   GLOBAL_TABLES,
   GLOBAL_PLUS_TENANT_TABLES,
   INSERT_ONLY_TABLES,
+  DELETION_ROLE_DELETES,
   RETENTION_ROLE_GRANTS,
   type RetentionPrivilege,
 } from './global-tables';

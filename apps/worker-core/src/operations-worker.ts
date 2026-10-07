@@ -28,7 +28,15 @@ import { logger } from '@oremedia/observability';
 export function operationsActivities() {
   const runtime = createOperationsRuntime();
   return {
-    ...createDeletionActivities(runtime.deletion),
+    // Spec 17.5 / 6.1: each handler step runs on the deletion role's connection (DATABASE_URL_DELETION,
+    // roles/deletion-role.sql), which adds DELETE on the insert-only tables a deletion removes; begin and finish
+    // touch only the request and audit rows and stay on the application role.
+    ...createDeletionActivities({
+      beginDeletion: (input) => runtime.deletion.beginDeletion(input),
+      runDeletionHandler: (input) =>
+        runWithDatabaseRole('deletion', () => runtime.deletion.runDeletionHandler(input)),
+      finishDeletion: (input) => runtime.deletion.finishDeletion(input),
+    }),
     // Spec 17.5 / 6.1: the TTL deletes run on the retention role's connection (DATABASE_URL_RETENTION,
     // roles/retention-role.sql), the only role with DELETE on the insert-only tables a TTL class removes.
     ...createRetentionActivities({

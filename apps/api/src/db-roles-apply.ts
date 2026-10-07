@@ -1,18 +1,24 @@
 /**
- * Database-role entrypoint (R1-G, D-25): applies the generated application role (and, when a password is given,
- * the retention role) to the database DATABASE_URL names, then proves the result with the same comparison as
- * `pnpm db:roles:check`. Runs inside the environment as the `db-roles` service (deploy runbook §1 step 5;
+ * Database-role entrypoint (R1-G, D-25): applies the generated application role (and, each when its password is
+ * given, the retention and deletion roles) to the database DATABASE_URL names, then proves the result with the same
+ * comparison as `pnpm db:roles:check`. Runs inside the environment as the `db-roles` service (deploy runbook §1 step 5;
  * Railway's MySQL is reachable only on the private network), connected as the MySQL admin; the application
  * services then connect as the role users. Re-run after a migration that adds tables: `applyRoleSql` waits for the
  * tables the role names before it grants, so a push that carries a migration and this service's redeploy together
  * never leaves a table without its grant.
  *
  * Inputs: DATABASE_URL (the admin connection), DB_APP_USER (default `oremedia_app`) with DB_APP_PASSWORD, and
- * optionally DB_RETENTION_USER (default `oremedia_retention`) with DB_RETENTION_PASSWORD. Prints no password and no
- * URL. Exits 1 when a role fails its check, 2 when it cannot run.
+ * optionally DB_RETENTION_USER (default `oremedia_retention`) with DB_RETENTION_PASSWORD and DB_DELETION_USER
+ * (default `oremedia_deletion`) with DB_DELETION_PASSWORD. Prints no password and no URL. Exits 1 when a role fails
+ * its check, 2 when it cannot run.
  */
 import { startTelemetry, stopTelemetry } from '@oremedia/observability';
-import { applyRoleSql, generateRetentionRoleSql, generateRoleSql } from '@oremedia/db/roles';
+import {
+  applyRoleSql,
+  generateDeletionRoleSql,
+  generateRetentionRoleSql,
+  generateRoleSql,
+} from '@oremedia/db/roles';
 
 const log = startTelemetry({ service: 'oremedia-api-db-roles-apply' });
 
@@ -32,6 +38,8 @@ try {
   const retentionUser =
     resolved('DB_RETENTION_USER', process.env['DB_RETENTION_USER']) ?? 'oremedia_retention';
   const retentionPassword = resolved('DB_RETENTION_PASSWORD', process.env['DB_RETENTION_PASSWORD']);
+  const deletionUser = resolved('DB_DELETION_USER', process.env['DB_DELETION_USER']) ?? 'oremedia_deletion';
+  const deletionPassword = resolved('DB_DELETION_PASSWORD', process.env['DB_DELETION_PASSWORD']);
 
   const lines = await applyRoleSql(adminUrl, 'application', appUser, appPassword, generateRoleSql);
   if (retentionPassword)
@@ -45,6 +53,11 @@ try {
       )),
     );
   else lines.push('SKIP retention: DB_RETENTION_PASSWORD not set; the retention role is not applied');
+  if (deletionPassword)
+    lines.push(
+      ...(await applyRoleSql(adminUrl, 'deletion', deletionUser, deletionPassword, generateDeletionRoleSql)),
+    );
+  else lines.push('SKIP deletion: DB_DELETION_PASSWORD not set; the deletion role is not applied');
   const failed = lines.some((l) => l.startsWith('FAIL'));
   // `status` is an allowlisted log field (observability allowlist); the lines carry names only, never a credential.
   for (const status of lines) {

@@ -87,3 +87,26 @@ export const RETENTION_ROLE_GRANTS: Readonly<Record<string, readonly RetentionPr
   seo_audit_pages: ['SELECT', 'DELETE'],
   audit_events: ['INSERT'],
 };
+
+/**
+ * Spec 17.5 / 6.1: the insert-only tables a tenant or brand deletion removes. The deletion database role
+ * (`roles/deletion-role.sql`, connection DATABASE_URL_DELETION) is the application role's table grants plus DELETE on
+ * exactly these (without the migrations table), and is used only by deletionRequestWorkflowV1's handler steps. audit_events and remote_evidence are retained on
+ * deletion (7 years) and stay undeletable; auth_events is a global table no tenant deletion touches. Worker-core's
+ * deletion-role test asserts this equals the tenant-scoped insert-only tables its handlers purge.
+ */
+export const DELETION_ROLE_DELETES: readonly string[] = [
+  'creative_revisions',
+  'rendered_exports',
+  'render_previews',
+  'preview_exports',
+  'review_decisions',
+  'metric_snapshots',
+  'link_clicks',
+  'usage_ledger',
+  'agent_steps',
+  'tool_invocations',
+  'evaluation_results',
+  'experiment_assignments',
+  'experiment_results',
+];
