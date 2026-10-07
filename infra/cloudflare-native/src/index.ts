@@ -1,8 +1,4 @@
-import {
-  WorkflowEntrypoint,
-  type WorkflowEvent,
-  type WorkflowStep,
-} from 'cloudflare:workers';
+import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from 'cloudflare:workers';
 
 interface Env {
   ASSETS: Fetcher;
@@ -32,12 +28,30 @@ const capabilities: Record<string, { status: Capability; note: string }> = {
   d1_foundation: { status: 'available', note: 'Isolated D1 database is used only for foundation probes.' },
   r2_foundation: { status: 'available', note: 'Isolated R2 bucket binding is available for object probes.' },
   queues_foundation: { status: 'available', note: 'Isolated Queue producer and consumer are configured.' },
-  workflows_foundation: { status: 'available', note: 'Cloudflare Workflow binding is configured for a probe workflow.' },
-  ore_media_api: { status: 'not_migrated', note: 'The production API is not replaced by this foundation Worker.' },
-  temporal_workflows: { status: 'not_migrated', note: 'OreMedia Temporal workflows require a deliberate Workflows port.' },
-  mysql_domain_model: { status: 'external_dependency', note: 'The current 116-table MySQL domain model remains outside this foundation.' },
-  media_renderer: { status: 'not_migrated', note: 'Chromium/FFmpeg rendering remains on the existing worker-render service.' },
-  malware_scanning: { status: 'not_migrated', note: 'ClamAV scanning remains on the existing media pipeline.' },
+  workflows_foundation: {
+    status: 'available',
+    note: 'Cloudflare Workflow binding is configured for a probe workflow.',
+  },
+  ore_media_api: {
+    status: 'not_migrated',
+    note: 'The production API is not replaced by this foundation Worker.',
+  },
+  temporal_workflows: {
+    status: 'not_migrated',
+    note: 'OreMedia Temporal workflows require a deliberate Workflows port.',
+  },
+  mysql_domain_model: {
+    status: 'external_dependency',
+    note: 'The current 116-table MySQL domain model remains outside this foundation.',
+  },
+  media_renderer: {
+    status: 'not_migrated',
+    note: 'Chromium/FFmpeg rendering remains on the existing worker-render service.',
+  },
+  malware_scanning: {
+    status: 'not_migrated',
+    note: 'ClamAV scanning remains on the existing media pipeline.',
+  },
 };
 
 function json(body: unknown, init?: ResponseInit): Response {
@@ -61,7 +75,9 @@ async function foundationProbe(env: Env, request: Request): Promise<Response> {
   try {
     await env.DB.prepare(
       'INSERT INTO foundation_probe_events (request_id, kind, created_at) VALUES (?, ?, ?)',
-    ).bind(id, 'request', now).run();
+    )
+      .bind(id, 'request', now)
+      .run();
 
     stage = 'queue';
     const body: FoundationEvent = { kind: 'foundation-probe', requestId: id, createdAt: now };
@@ -70,23 +86,29 @@ async function foundationProbe(env: Env, request: Request): Promise<Response> {
     stage = 'workflow';
     const instance = await env.FOUNDATION_WORKFLOW.create({ params: { requestId: id } });
 
-    return json({
-      ok: true,
-      requestId: id,
-      workflowId: instance.id,
-      r2Binding: Boolean(env.ASSET_BUCKET),
-      queueBinding: Boolean(env.EVENTS),
-      databaseBinding: Boolean(env.DB),
-      deployment: env.OREMEDIA_DEPLOYMENT,
-      commit: env.OREMEDIA_CF_COMMIT,
-    }, { status: 202 });
+    return json(
+      {
+        ok: true,
+        requestId: id,
+        workflowId: instance.id,
+        r2Binding: Boolean(env.ASSET_BUCKET),
+        queueBinding: Boolean(env.EVENTS),
+        databaseBinding: Boolean(env.DB),
+        deployment: env.OREMEDIA_DEPLOYMENT,
+        commit: env.OREMEDIA_CF_COMMIT,
+      },
+      { status: 202 },
+    );
   } catch (error) {
-    return json({
-      ok: false,
-      code: 'FOUNDATION_PROBE_FAILED',
-      stage,
-      error: error instanceof Error ? error.message : String(error),
-    }, { status: 500 });
+    return json(
+      {
+        ok: false,
+        code: 'FOUNDATION_PROBE_FAILED',
+        stage,
+        error: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 },
+    );
   }
 }
 
@@ -98,7 +120,9 @@ export class OreMediaFoundationWorkflow extends WorkflowEntrypoint<Env> {
     await step.do('record-workflow-start', async () => {
       await this.env.DB.prepare(
         'INSERT INTO foundation_probe_events (request_id, kind, created_at) VALUES (?, ?, ?)',
-      ).bind(event.payload.requestId, 'workflow-start', new Date().toISOString()).run();
+      )
+        .bind(event.payload.requestId, 'workflow-start', new Date().toISOString())
+        .run();
     });
 
     await step.sleep('durable-boundary', '1 second');
@@ -106,7 +130,9 @@ export class OreMediaFoundationWorkflow extends WorkflowEntrypoint<Env> {
     await step.do('record-workflow-complete', async () => {
       await this.env.DB.prepare(
         'INSERT INTO foundation_probe_events (request_id, kind, created_at) VALUES (?, ?, ?)',
-      ).bind(event.payload.requestId, 'workflow-complete', new Date().toISOString()).run();
+      )
+        .bind(event.payload.requestId, 'workflow-complete', new Date().toISOString())
+        .run();
     });
 
     return { requestId: event.payload.requestId, status: 'completed' };
@@ -134,13 +160,23 @@ export default {
       return foundationProbe(env, request);
     }
 
-    if (url.pathname.startsWith('/trpc/') || url.pathname.startsWith('/auth/') || url.pathname.startsWith('/v1/') || url.pathname === '/mcp' || url.pathname.startsWith('/mcp/')) {
-      return json({
-        ok: false,
-        code: 'NOT_MIGRATED',
-        message: 'This route is intentionally fail-closed: the full OreMedia API has not been replaced by the Cloudflare foundation Worker.',
-        path: url.pathname,
-      }, { status: 503 });
+    if (
+      url.pathname.startsWith('/trpc/') ||
+      url.pathname.startsWith('/auth/') ||
+      url.pathname.startsWith('/v1/') ||
+      url.pathname === '/mcp' ||
+      url.pathname.startsWith('/mcp/')
+    ) {
+      return json(
+        {
+          ok: false,
+          code: 'NOT_MIGRATED',
+          message:
+            'This route is intentionally fail-closed: the full OreMedia API has not been replaced by the Cloudflare foundation Worker.',
+          path: url.pathname,
+        },
+        { status: 503 },
+      );
     }
 
     return env.ASSETS.fetch(request);
@@ -150,7 +186,9 @@ export default {
     for (const message of batch.messages) {
       await env.DB.prepare(
         'INSERT INTO foundation_probe_events (request_id, kind, created_at) VALUES (?, ?, ?)',
-      ).bind(message.body.requestId, 'queue-consumed', new Date().toISOString()).run();
+      )
+        .bind(message.body.requestId, 'queue-consumed', new Date().toISOString())
+        .run();
       message.ack();
     }
   },
