@@ -96,7 +96,7 @@ describe.skipIf(!enabled)('accessibility audit (built app in Chromium, mock tran
       ready: (page) =>
         page
           .getByTestId('needs-you')
-          .or(page.getByRole('heading', { name: 'Nothing needs you' }))
+          .or(page.getByRole('status').filter({ hasText: 'Nothing needs attention' }))
           .waitFor({ timeout: 15_000 }),
     },
     {

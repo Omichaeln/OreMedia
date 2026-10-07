@@ -41,9 +41,10 @@ describe.skipIf(!webOrigin)('deployed origin (real web, api and fixtures in Chro
     expect(violations, formatViolations(name, violations)).toEqual([]);
   };
   /** The home has settled: rows need attention, or the empty state (a status) says nothing does. */
-  const nothingNeedsYou = (p: Page) => p.getByRole('status').filter({ hasText: 'Nothing needs you' });
+  const nothingNeedsAttention = (p: Page) =>
+    p.getByRole('status').filter({ hasText: 'Nothing needs attention' });
   const homeReady = (p: Page) =>
-    p.getByTestId('needs-you').or(nothingNeedsYou(p)).waitFor({ timeout: 30_000 });
+    p.getByTestId('needs-you').or(nothingNeedsAttention(p)).waitFor({ timeout: 30_000 });
 
   beforeAll(async () => {
     people = deployedPeople();
@@ -117,7 +118,7 @@ describe.skipIf(!webOrigin)('deployed origin (real web, api and fixtures in Chro
     await other.getByText('Restricted access').waitFor({ timeout: 30_000 });
     expect(await other.getByText(brandName).count()).toBe(0);
     expect(await other.getByTestId('needs-you').count()).toBe(0);
-    expect(await nothingNeedsYou(other).count()).toBe(0);
+    expect(await nothingNeedsAttention(other).count()).toBe(0);
     await other.goto(`${origin}${brandPath(people.b, 'home')}`);
     await homeReady(other);
     await other.close();
