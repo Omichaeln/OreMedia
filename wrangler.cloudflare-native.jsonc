@@ -16,51 +16,51 @@
       "/auth/*",
       "/v1/*",
       "/mcp",
-      "/mcp/*"
-    ]
+      "/mcp/*",
+    ],
   },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "oremedia-cf-native-db",
       "database_id": "1ecabdb7-aec6-40f6-aa9f-469ac58a8738",
-      "migrations_dir": "infra/cloudflare-native/migrations"
-    }
+      "migrations_dir": "infra/cloudflare-native/migrations",
+    },
   ],
   "r2_buckets": [
     {
       "binding": "ASSET_BUCKET",
-      "bucket_name": "oremedia-cf-native-assets"
-    }
+      "bucket_name": "oremedia-cf-native-assets",
+    },
   ],
   "queues": {
     "producers": [
       {
         "binding": "EVENTS",
-        "queue": "oremedia-cf-native-events"
-      }
+        "queue": "oremedia-cf-native-events",
+      },
     ],
     "consumers": [
       {
         "queue": "oremedia-cf-native-events",
         "max_batch_size": 10,
         "max_batch_timeout": 5,
-        "max_retries": 5
-      }
-    ]
+        "max_retries": 5,
+      },
+    ],
   },
   "workflows": [
     {
       "name": "oremedia-cf-native-foundation",
       "binding": "FOUNDATION_WORKFLOW",
-      "class_name": "OreMediaFoundationWorkflow"
-    }
+      "class_name": "OreMediaFoundationWorkflow",
+    },
   ],
   "vars": {
     "OREMEDIA_DEPLOYMENT": "cloudflare-native",
-    "OREMEDIA_CF_COMMIT": "d04bf936f9c17b081e94c08768ffcc98a12a0671"
+    "OREMEDIA_CF_COMMIT": "ci-or-manual-override",
   },
   "observability": {
-    "enabled": true
-  }
+    "enabled": true,
+  },
 }
