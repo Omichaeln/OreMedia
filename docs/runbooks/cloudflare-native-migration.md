@@ -24,6 +24,29 @@ The resources belong to the `Omichael@oreandtar.com` Cloudflare account. They mu
 - The Workflow records start and completion in D1 across a durable sleep boundary.
 - Existing `/trpc/*`, `/auth/*`, `/v1/*`, and `/mcp*` routes fail closed with `503 NOT_MIGRATED` rather than pretending the production API exists.
 
+## Deployment and secret configuration
+
+The reproducible configuration is `wrangler.cloudflare-native.jsonc`. The GitHub Actions workflow is manual-or-branch-triggered and requires the following repository Actions secret:
+
+- `CLOUDFLARE_API_TOKEN` — an account-scoped Cloudflare API token with only the permissions needed to deploy this Worker and manage its isolated resources.
+
+Never commit the token or place it in `vars`. The workflow passes the GitHub commit SHA to Wrangler as `OREMEDIA_CF_COMMIT`; local deployments should do the same with `--var OREMEDIA_CF_COMMIT:<sha>`.
+
+The isolated D1 migration is applied explicitly:
+
+```bash
+pnpm dlx wrangler@4.147.0 d1 migrations apply oremedia-cf-native-db --remote --config wrangler.cloudflare-native.jsonc
+```
+
+The Worker is deployed with:
+
+```bash
+pnpm --filter @oremedia/web build
+pnpm dlx wrangler@4.147.0 deploy \
+  --config wrangler.cloudflare-native.jsonc \
+  --var OREMEDIA_CF_COMMIT:"$(git rev-parse HEAD)"
+```
+
 ## Why this is not yet a full OreMedia migration
 
 The current OreMedia runtime still depends on boundaries that are not replaced by this branch:
@@ -37,12 +60,24 @@ The current OreMedia runtime still depends on boundaries that are not replaced b
 
 Until these gates are implemented and tested, the Cloudflare Worker must remain labelled `foundation-only` and must not be promoted as the production OreMedia API.
 
+## Cost assumptions
+
+These are planning estimates, not a quote, and exclude external AI/provider, Google Workspace, Meta/LinkedIn, database/Temporal, domain, tax, and engineering costs:
+
+- **Development/low traffic:** approximately `$5–$15/month` for Workers Paid and light R2/Queues/Workflows usage.
+- **Small production:** approximately `$10–$40/month` before meaningful AI inference.
+- **Active production:** approximately `$30–$100+/month`, mainly driven by logs, Durable Object coordination, R2 operations, container rendering, and AI.
+- **Cloudflare-native metadata plus regular rendering/AI:** plan approximately `$30–$200+/month` until measured workload data is available.
+
+Workers AI and external AI inference must be metered per tenant. Rendering and scanner costs are workload-dependent and must be benchmarked before any production commitment.
+
 ## Local verification
 
 ```bash
 pnpm --filter @oremedia/web build
-pnpm dlx wrangler@4.147.0 d1 migrations apply oremedia-cf-native-db --remote --config wrangler.cloudflare-native.jsonc
-pnpm dlx wrangler@4.147.0 deploy --config wrangler.cloudflare-native.jsonc
+pnpm exec tsc --noEmit -p infra/cloudflare-native/tsconfig.json
+pnpm exec prettier --check .
+pnpm dlx wrangler@4.147.0 deploy --config wrangler.cloudflare-native.jsonc --dry-run
 
 curl -fsS https://<worker-host>/health
 curl -fsS https://<worker-host>/cf-capabilities
@@ -50,6 +85,14 @@ curl -fsS -X POST https://<worker-host>/cf-foundation/probe
 ```
 
 The probe should return `202` with a Workflow ID. Query the D1 events with Wrangler and verify `request`, `queue-consumed`, `workflow-start`, and `workflow-complete` records for the same request ID.
+
+## Rollback and recovery
+
+- **No Railway cutover was performed.** Railway remains the serving production deployment and is the immediate application rollback target.
+- Do not change production DNS, OAuth redirect URIs, Meta/LinkedIn settings, or Railway services as part of this foundation deployment.
+- For a Cloudflare-only regression, stop the foundation workflow trigger and roll the Worker back to the last known-good Worker version using the Cloudflare dashboard or the pinned Wrangler rollback/version command after checking the version list.
+- The D1 database and R2 bucket are isolated and contain only foundation probe data/assets. Do not delete them as a rollback action; preserve them for diagnosis and recovery.
+- Before any future data migration, take a source MySQL backup, export/validate the target dataset, run tenant-count/checksum comparisons, and rehearse restore. This branch performs **no production data migration**.
 
 ## Production-readiness gates before cutover
 
