@@ -2,7 +2,13 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import mysql from 'mysql2/promise';
 import { randomBytes } from 'node:crypto';
 import { createTestDatabase, type TestDatabase } from './testing';
-import { applyRoleSql, generateRetentionRoleSql, generateRoleSql, readHeldGrants } from './roles';
+import {
+  applyRoleSql,
+  generateDeletionRoleSql,
+  generateRetentionRoleSql,
+  generateRoleSql,
+  readHeldGrants,
+} from './roles';
 
 /**
  * R1-G (D-25): `applyRoleSql` (the api's db-roles-apply entrypoint) creates the role user, sets its password,
@@ -47,6 +53,12 @@ describe('applyRoleSql', () => {
     const held = await readHeldGrants(asRole.toString());
     expect(held.user).toBe(`${user}@%`);
     expect(held.grants.some((g) => /ALL PRIVILEGES/i.test(g))).toBe(false);
+  });
+
+  it('applies the deletion role with exactly its generated grants', async () => {
+    const user = userName();
+    const lines = await applyRoleSql(adminUrl, 'deletion', user, 'a-password', generateDeletionRoleSql, 0);
+    expect(lines).toContain(`PASS deletion: ${user} holds exactly the generated grants`);
   });
 
   it('re-running converges after a grant drifted and rotates the password', async () => {

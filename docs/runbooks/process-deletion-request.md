@@ -11,7 +11,8 @@ run; a brand deletion narrows to the brand; the retention sweep's dry run counts
 past their TTL; the operator confirmations complete the request. The re-application after a restore is exercised
 by `runbooks.integration.test.ts` ("restore a single tenant"). **Needs a live environment for:** the Temporal
 namespace retention check, the log backend purge, bucket versioning/lifecycle, backup expiry, and the DELETE grant
-of the retention database role on the insert-only tables (the local run uses root).
+of the retention and deletion database roles on the insert-only tables (the local run uses root;
+`deletion-role.integration.test.ts` runs it on the roles).
 
 ## What runs by itself
 
@@ -83,9 +84,15 @@ sweep runs on its own role (`packages/db/roles/retention-role.sql`, generated fr
 DELETE on `messages`, UPDATE on `customer_voice_clusters`, SELECT on those and `retention_policies`, INSERT on
 `audit_events`; no other privilege. Without `DATABASE_URL_RETENTION` the sweep runs on the application role and a
 real (non-dry) run fails with `ER_TABLEACCESS_DENIED_ERROR` (retried the next day; each tenant is one transaction).
-**Open:** the deletion workflow's purge of `creative_revisions`, `rendered_exports`, `render_previews`,
-`preview_exports`, `review_decisions`, `usage_ledger`, `evaluation_results`, `experiment_assignments`,
-`experiment_results` and the TTL tables above still runs on the application role, so in an environment that uses it
-those steps fail with `ER_TABLEACCESS_DENIED_ERROR` (the step stays pending and is retried; nothing is half-deleted
-inside a step, since each step is one transaction). The preview tables belong to the `creative` step, which already
-fails there on `creative_revisions` and `rendered_exports`; they add no new failing step.
+The deletion workflow's handler steps run on the deletion role (`packages/db/roles/deletion-role.sql`, generated from
+`DELETION_ROLE_DELETES` in `packages/db/src/global-tables.ts`) through worker-core's `DATABASE_URL_DELETION`
+connection: the application role's table grants (not the migrations table) plus DELETE on the insert-only tables a deletion removes
+(`creative_revisions`, `rendered_exports`, `render_previews`, `preview_exports`, `review_decisions`, `usage_ledger`,
+`evaluation_results`, `experiment_assignments`, `experiment_results`, and the TTL tables above); `audit_events`,
+`remote_evidence` and `auth_events` stay undeletable and no insert-only row can be updated. `beginDeletion` and
+`finishDeletion` stay on the application role. Without `DATABASE_URL_DELETION` the handler steps run on the
+application role and the first one that reaches an insert-only table (`agents`, on `agent_steps`) fails with
+`ER_TABLEACCESS_DENIED_ERROR`: the step's transaction rolls back, it stays pending and is retried, so set the
+variable (deploy runbook §1 step 5) and the retried step completes. Proof: `packages/db/src/deletion-role.integration.test.ts`
+(what the engine allows the role) and `apps/worker-core/src/deletion-role.integration.test.ts` (a tenant deletion
+refused on the application role, completed on the deletion role).

@@ -15,7 +15,7 @@ Application services, plus a short-lived approval monitor, each use the reposito
 
 `worker-ingest` (Phase 6) and `redirector` (Phase 5) are listed for completeness: their `railway.json` files are in place, but the apps do not exist yet and the services must not be created until they do.
 
-Database roles: `DATABASE_URL` on every service points at the application role (`packages/db/roles/app-role.sql`); `worker-core` additionally sets `DATABASE_URL_RETENTION`, a second MySQL user with the retention role (`packages/db/roles/retention-role.sql`), used only by the retention sweep's activities.
+Database roles: `DATABASE_URL` on every service points at the application role (`packages/db/roles/app-role.sql`); `worker-core` additionally sets `DATABASE_URL_RETENTION`, a second MySQL user with the retention role (`packages/db/roles/retention-role.sql`), used only by the retention sweep's activities, and `DATABASE_URL_DELETION`, a third with the deletion role (`packages/db/roles/deletion-role.sql`), used only by the deletion workflow's handler steps.
 
 Managed dependencies: Railway MySQL (application), Railway Redis, Cloudflare R2 (object storage, external: Railway offers no S3-compatible store), and Temporal Cloud (recommended) or the `temporal` service above with its own Railway MySQL instance. Variables follow Appendix A names exactly; secrets are Railway sealed variables.
 

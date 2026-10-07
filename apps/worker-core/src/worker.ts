@@ -55,6 +55,11 @@ configureDatabase({ url, connectionLimit: Number(process.env['DATABASE_POOL'] ??
 const retentionUrl = process.env['DATABASE_URL_RETENTION'];
 if (retentionUrl) configureRoleDatabase('retention', { url: retentionUrl, connectionLimit: 2 });
 else log.warn({}, 'DATABASE_URL_RETENTION not set: the retention sweep uses the application role');
+// Spec 17.5: deletionRequestWorkflowV1's handler steps use the deletion role (roles/deletion-role.sql), the only role
+// with DELETE on the insert-only tables a tenant or brand deletion removes. Without it those steps are refused.
+const deletionUrl = process.env['DATABASE_URL_DELETION'];
+if (deletionUrl) configureRoleDatabase('deletion', { url: deletionUrl, connectionLimit: 2 });
+else log.warn({}, 'DATABASE_URL_DELETION not set: deletion handler steps use the application role');
 
 const client = await connectTemporal(temporalConfig);
 composeModules({ workflowProbe: new TemporalWorkflowProbe(client) });

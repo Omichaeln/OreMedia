@@ -37,11 +37,12 @@ export function configureDatabase(cfg: DatabaseConfig): Db {
 }
 
 /**
- * Database roles with narrower grants than the application role, each on its own pool (spec 6.1 / 17.5). Only
- * `retention`: roles/retention-role.sql, configured from DATABASE_URL_RETENTION by the worker that hosts
- * retentionSweepWorkflowV1 and entered only by that workflow's activities (runWithDatabaseRole).
+ * Database roles other than the application role, each on its own pool (spec 6.1 / 17.5), configured by the worker
+ * that hosts the workflow and entered only by that workflow's activities (runWithDatabaseRole):
+ * `retention`: roles/retention-role.sql, from DATABASE_URL_RETENTION, for retentionSweepWorkflowV1;
+ * `deletion`: roles/deletion-role.sql, from DATABASE_URL_DELETION, for deletionRequestWorkflowV1's handler steps.
  */
-export type DatabaseRole = 'retention';
+export type DatabaseRole = 'retention' | 'deletion';
 
 const rolePools = new Map<DatabaseRole, { pool: mysql.Pool; handle: Db }>();
 const roleScope = new AsyncLocalStorage<Db>();

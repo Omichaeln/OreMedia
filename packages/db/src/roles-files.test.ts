@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { generateRetentionRoleSql, generateRoleSql } from './roles';
+import { generateDeletionRoleSql, generateRetentionRoleSql, generateRoleSql } from './roles';
 
 /**
  * The committed role files are what db-roles applies in every environment, so they must equal what the schema
@@ -19,5 +19,8 @@ describe('committed database role files', () => {
     expect(committed('retention-role.sql')).toBe(
       generateRetentionRoleSql('__DB_NAME__', '__RETENTION_USER__'),
     );
+  });
+  it('deletion-role.sql equals the generated deletion role', () => {
+    expect(committed('deletion-role.sql')).toBe(generateDeletionRoleSql('__DB_NAME__', '__DELETION_USER__'));
   });
 });

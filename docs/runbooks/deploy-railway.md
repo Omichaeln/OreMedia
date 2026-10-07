@@ -28,7 +28,9 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
      OAuth client serves both, `docs/platform-apps/google.md`), optional `OREMEDIA_DISABLED_SOURCES`; the Business
      Profile pair `PROVIDER_GBP_LOCATION_CLIENT_ID_REF` / `PROVIDER_GBP_LOCATION_SECRET_REF` with `OREMEDIA_ENABLE_GBP=1`
      only once Google granted the project Business Profile API access (R2-2; off by default);
-   - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep);
+   - `worker-core`: `DATABASE_URL_RETENTION` (step 5: the retention role's user, used only by the retention sweep)
+     and `DATABASE_URL_DELETION` (step 5: the deletion role's user, used only by the deletion workflow's handler
+     steps; without it a tenant or brand deletion stops at its first insert-only table);
    - `worker-core`, `worker-ingest`: `KMS_KEY_ID_CREDENTIALS` (decrypt permission), `MODEL_ROUTING_POLICY_REF`,
      `OPENROUTER_API_KEY_REF` and `OREMEDIA_MODEL_ID` (ADR-11; set a monthly credit limit on the key), `IMAGE_GEN_PROVIDER=openrouter` with `OREMEDIA_IMAGE_MODEL_ID` (an OpenRouter image model id) for `images.generate`, `VIDEO_GEN_PROVIDER=openrouter` with `OREMEDIA_VIDEO_MODEL_ID` (an OpenRouter video model id) for `videos.generate` (see the rollout below), `SPEECH_GEN_PROVIDER=openrouter` with `OREMEDIA_SPEECH_MODEL_ID` (an OpenRouter text-to-speech model id) and optional `OREMEDIA_SPEECH_VOICE` for `speech.generate`, `OBJECT_STORE_*`, provider credentials `PROVIDER_<KEY>_CLIENT_ID_REF` and `PROVIDER_<KEY>_SECRET_REF` (token refresh reads both), and on `worker-core` and `worker-ingest` the source pairs `PROVIDER_GA4_PROPERTY_*` and `PROVIDER_SEARCH_CONSOLE_SITE_*` (worker-core's daily destination token refresh and worker-ingest's daily report sweep read both) with optional `OREMEDIA_DISABLED_SOURCES`, and `PROVIDER_GBP_LOCATION_*` with `OREMEDIA_ENABLE_GBP=1` where the Business Profile kind is enabled (R2-2);
    - `api`: `OREMEDIA_MODEL_PROVIDER` (`openrouter` where the workers hold `OPENROUTER_API_KEY_REF`) and
@@ -55,17 +57,17 @@ and cannot be performed from the build environment (no `RAILWAY_TOKEN`). Nothing
    network): add a `db-roles` service from this repository with `OREMEDIA_APP=api`, Dockerfile
    `infra/railway/Dockerfile`, start command `node dist/db-roles-apply.js`, restart policy never and no health
    check, and the variables `DATABASE_URL` (the admin connection, `${{MySQL.MYSQL_URL}}`), `DB_APP_PASSWORD` and
-   `DB_RETENTION_PASSWORD` (generated, for example `${{secret(48)}}`; optional `DB_APP_USER` and
-   `DB_RETENTION_USER` default to `oremedia_app` and `oremedia_retention`). Each deploy of it creates the users
-   when missing, sets their passwords, revokes and re-grants exactly `packages/db/roles/app-role.sql` and
-   `retention-role.sql`, then logs the same `PASS`/`FAIL` lines as `pnpm db:roles:check` (section 3b). It waits
-   for every table the role names before it grants, so a push carrying a migration can redeploy it alongside the
-   api. Then point the application services' `DATABASE_URL` at the application user: a MySQL URL whose user is
+   `DB_RETENTION_PASSWORD` and `DB_DELETION_PASSWORD` (generated, for example `${{secret(48)}}`; optional
+   `DB_APP_USER`, `DB_RETENTION_USER` and `DB_DELETION_USER` default to `oremedia_app`, `oremedia_retention` and
+   `oremedia_deletion`). Each deploy of it creates the users when missing, sets their passwords, revokes and
+   re-grants exactly `packages/db/roles/app-role.sql`, `retention-role.sql` and `deletion-role.sql`, then logs the
+   same `PASS`/`FAIL` lines as `pnpm db:roles:check` (section 3b). It waits for every table the role names before
+   it grants, so a push carrying a migration can redeploy it alongside the api. Then point the application services' `DATABASE_URL` at the application user: a MySQL URL whose user is
    `oremedia_app`, whose password is the reference `${{db-roles.DB_APP_PASSWORD}}`, and whose host and database
    are `${{MySQL.RAILWAY_PRIVATE_DOMAIN}}` and `${{MySQL.MYSQL_DATABASE}}` (nobody types the password); worker-core's
-   `DATABASE_URL_RETENTION` names the retention user the same way. Migrations need DDL the application role does
-   not hold, so the api (and the approval monitor, which also migrates) keep `DATABASE_URL_MIGRATE` set to the admin
-   connection: `migrate.js` uses it for the pre-deploy step only and the running process never reads it. Both SQL
+   `DATABASE_URL_RETENTION` names the retention user, and `DATABASE_URL_DELETION` the deletion user, the same way.
+   Migrations need DDL the application role does not hold, so the api (and the approval monitor, which also migrates) keep `DATABASE_URL_MIGRATE` set to the admin
+   connection: `migrate.js` uses it for the pre-deploy step only and the running process never reads it. The SQL
    files are generated
    (`pnpm tsx tooling/scripts/generate-db-roles.ts`); redeploy `db-roles` after a migration that adds tables (the
    app role's grants are per table).
@@ -497,7 +499,7 @@ journeys it stands in front of are in `uat-journeys.md`.
 `pnpm db:roles:check` (R1-G, D-25) proves which user each connection runs as and whether it holds exactly the
 generated grants: run locally through the Railway CLI with the service's variables injected (`railway link` to
 the environment and api service, then `railway run pnpm db:roles:check`; the deployed images carry no tooling), it
-reads `DATABASE_URL` and, when set, `DATABASE_URL_RETENTION`, runs only `SELECT CURRENT_USER()` and `SHOW GRANTS`
+reads `DATABASE_URL` and, when set, `DATABASE_URL_RETENTION` and `DATABASE_URL_DELETION`, runs only `SELECT CURRENT_USER()` and `SHOW GRANTS`
 (roles expanded), prints one line per finding and no credential, and exits 1 on root, on a database-wide or
 wildcard privilege, on GRANT OPTION, on a missing grant or on one beyond the role. The `db-roles` service of
 section 1 step 5 logs the same lines after it applies the roles (`db-roles-apply`), so its deploy log is the
